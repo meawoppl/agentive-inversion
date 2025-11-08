@@ -3,7 +3,7 @@ use yew::prelude::*;
 
 #[function_component(App)]
 fn app() -> Html {
-    let todos = use_state(|| Vec::<Todo>::new());
+    let todos = use_state(Vec::<Todo>::new);
 
     html! {
         <div class="app">

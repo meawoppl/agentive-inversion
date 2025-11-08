@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "diesel", derive(diesel::Queryable, diesel::Insertable))]
-#[cfg_attr(feature = "diesel", diesel(table_name = todos))]
+#[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
 pub struct Todo {
     pub id: Uuid,
     pub title: String,

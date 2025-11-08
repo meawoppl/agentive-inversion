@@ -1,0 +1,56 @@
+[package]
+name = "polling-services"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "polling-services"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+shared = { path = "../shared" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Database
+diesel = { workspace = true }
+diesel-async = { workspace = true }
+deadpool-diesel = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Configuration
+dotenv = { workspace = true }
+config = { workspace = true }
+
+# Google APIs
+google-gmail1 = { workspace = true }
+google-calendar3 = { workspace = true }
+yup-oauth2 = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Crypto
+aes-gcm = "0.10"
+base64 = "0.21"

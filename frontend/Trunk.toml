@@ -1,0 +1,17 @@
+[[hooks]]
+stage = "pre_build"
+command = "echo"
+command_arguments = ["Building Agentive Inversion Frontend..."]
+
+[build]
+target = "index.html"
+release = false
+dist = "dist"
+
+[watch]
+ignore = ["dist"]
+
+[serve]
+address = "127.0.0.1"
+port = 8000
+open = false

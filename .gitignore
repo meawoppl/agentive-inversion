@@ -19,3 +19,34 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+credentials.json
+token.json
+service-account.json
+*.key
+*.pem
+
+# Frontend build artifacts
+/frontend/dist/
+/frontend/pkg/
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing & Coverage
+coverage/
+*.profraw
+*.profdata

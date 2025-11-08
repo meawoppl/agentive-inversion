@@ -1,0 +1,36 @@
+[package]
+name = "email-poller"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared-types = { path = "../shared-types" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Database
+diesel.workspace = true
+diesel-async.workspace = true
+
+# Email
+async-imap = "0.9"
+async-native-tls = "0.5"
+
+# Google OAuth
+google-gmail1 = "5.0"
+yup-oauth2 = "9.0"
+hyper = "1.0"
+hyper-rustls = "0.27"
+
+# Config
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio-test = "0.4"

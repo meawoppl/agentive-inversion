@@ -1,0 +1,17 @@
+target/*
+!target/release
+.git/
+.github/
+*.md
+!README.md
+.env
+.env.*
+!crates/frontend/dist
+*.token.json
+tokens/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

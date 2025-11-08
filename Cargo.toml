@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/frontend",
+    "crates/backend",
+    "crates/shared-types",
+    "crates/email-poller",
+    "crates/calendar-poller",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["meawoppl"]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["serde", "v4", "js"] }
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Database
+diesel = { version = "2.1", features = ["postgres", "r2d2", "chrono", "uuid"] }
+diesel-async = { version = "0.4", features = ["postgres", "deadpool"] }
+
+# Web
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Frontend
+yew = { version = "0.21", features = ["csr"] }
+wasm-bindgen = "0.2"
+web-sys = "0.3"
+gloo = "0.11"

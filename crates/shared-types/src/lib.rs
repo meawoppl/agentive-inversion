@@ -12,6 +12,8 @@ pub struct Todo {
     pub source: TodoSource,
     pub source_id: Option<String>,
     pub due_date: Option<DateTime<Utc>>,
+    pub link: Option<String>,
+    pub category_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -30,6 +32,8 @@ pub struct CreateTodoRequest {
     pub title: String,
     pub description: Option<String>,
     pub due_date: Option<DateTime<Utc>>,
+    pub link: Option<String>,
+    pub category_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +42,8 @@ pub struct UpdateTodoRequest {
     pub description: Option<String>,
     pub completed: Option<bool>,
     pub due_date: Option<DateTime<Utc>>,
+    pub link: Option<String>,
+    pub category_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,4 +138,26 @@ pub struct CalendarAccount {
     pub calendar_id: String,
     pub last_synced: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
+pub struct Category {
+    pub id: Uuid,
+    pub name: String,
+    pub color: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateCategoryRequest {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCategoryRequest {
+    pub name: Option<String>,
+    pub color: Option<String>,
 }

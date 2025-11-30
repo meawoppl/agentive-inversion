@@ -19,9 +19,9 @@ pub fn establish_connection_pool() -> anyhow::Result<DbPool> {
 }
 
 // Email account database operations
+#[allow(dead_code)]
 pub mod email_accounts {
     use super::*;
-    use crate::schema::email_accounts;
 
     pub async fn list_all(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<EmailAccount>> {
         use crate::schema::email_accounts::dsl::*;

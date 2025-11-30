@@ -7,7 +7,7 @@ mod gmail_client;
 mod processor;
 mod schema;
 
-use gmail_client::{EmailMessage, GmailClient};
+use gmail_client::GmailClient;
 use processor::process_email_to_todo;
 use shared_types::EmailAccount;
 

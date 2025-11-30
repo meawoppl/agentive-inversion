@@ -38,6 +38,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/email-accounts/oauth/callback",
             get(handlers::gmail_oauth_callback),
         )
+        // Category routes
+        .route("/api/categories", get(handlers::list_categories))
+        .route("/api/categories", post(handlers::create_category))
+        .route("/api/categories/:id", put(handlers::update_category))
+        .route("/api/categories/:id", delete(handlers::delete_category))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

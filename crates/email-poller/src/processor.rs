@@ -53,6 +53,8 @@ pub fn process_email_to_todo(email: &EmailMessage, account: &EmailAccount) -> Op
         },
         source_id: Some(email.id.clone()),
         due_date: None,
+        link: None,
+        category_id: None,
         created_at: email.received_at.unwrap_or_else(Utc::now),
         updated_at: Utc::now(),
     })

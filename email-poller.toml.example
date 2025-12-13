@@ -1,0 +1,33 @@
+# Email Poller Configuration
+
+# Directory where downloaded emails are stored
+inbox_dir = "./emails/inbox"
+
+# Directory where emails to be archived are placed (by another service)
+archive_queue_dir = "./emails/to_archive"
+
+# How often to poll for new emails (seconds)
+poll_interval_secs = 300
+
+# How often to check the archive queue (seconds)
+archive_check_interval_secs = 30
+
+# Global rate limit: minimum seconds between polls for any account
+rate_limit_secs = 60
+
+# Global max fetch: maximum emails to fetch per poll
+max_fetch_per_poll = 50
+
+# Email accounts to poll
+[[accounts]]
+name = "Personal Gmail"
+imap_server = "imap.gmail.com"
+email = "you@gmail.com"
+password = "your-app-password"
+
+# Add more accounts as needed:
+# [[accounts]]
+# name = "Work Email"
+# imap_server = "imap.company.com"
+# email = "you@company.com"
+# password = "password"

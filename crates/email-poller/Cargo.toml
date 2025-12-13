@@ -4,34 +4,38 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-shared-types = { path = "../shared-types", features = ["diesel"] }
-serde.workspace = true
-serde_json.workspace = true
+shared-types = { path = "../shared-types" }
 tokio.workspace = true
 chrono.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 anyhow.workspace = true
-thiserror.workspace = true
 
-# Database
-diesel.workspace = true
-diesel-async.workspace = true
-
-# Email
+# IMAP
 async-imap = "0.9"
 async-native-tls = "0.5"
+async-std = { version = "1.13.2", features = ["attributes"] }
+futures = "0.3"
+mailparse = "0.16"
 
-# Google OAuth
-google-gmail1 = "5.0"
-yup-oauth2 = "9.0"
-hyper = "1.0"
-hyper-rustls = "0.27"
-
-# Config
+# Config & Logging
 dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-base64 = "0.21"
+rpassword = "7.4.0"
+serde_json.workspace = true
+serde.workspace = true
+toml = "0.9.8"
+notify = "8.2.0"
+clap = { version = "4.5.53", features = ["derive"] }
+reqwest = { version = "0.12.24", features = ["rustls-tls"] }
+base64 = "0.22.1"
+urlencoding = "2.1.3"
+google-calendar3 = "6.0.0"
+yup-oauth2 = "12.1.1"
+hyper = { version = "1.8.1", features = ["client"] }
+hyper-util = { version = "0.1.18", features = ["client-legacy"] }
+rustls = { version = "0.23.35", features = ["ring"] }
+chrono-tz = "0.10.4"
 
 [dev-dependencies]
 tokio-test = "0.4"

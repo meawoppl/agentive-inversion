@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Todo struct matching database column order exactly
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
 pub struct Todo {
@@ -9,13 +10,13 @@ pub struct Todo {
     pub title: String,
     pub description: Option<String>,
     pub completed: bool,
-    pub source: TodoSource,
+    pub source: String, // stored as VARCHAR: "manual", "email", "calendar"
     pub source_id: Option<String>,
     pub due_date: Option<DateTime<Utc>>,
-    pub link: Option<String>,
-    pub category_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub link: Option<String>,
+    pub category_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

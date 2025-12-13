@@ -10,28 +10,86 @@ use shared_types::{
 };
 use uuid::Uuid;
 
-use crate::db::{email_accounts, DbPool};
+use crate::db::{categories, email_accounts, todos, DbPool};
 
 // Todo handlers
-pub async fn list_todos() -> Result<Json<Vec<Todo>>, StatusCode> {
-    Ok(Json(vec![]))
+pub async fn list_todos(State(pool): State<DbPool>) -> Result<Json<Vec<Todo>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let items = todos::list_all(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to list todos: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(items))
 }
 
 pub async fn create_todo(
-    Json(_payload): Json<CreateTodoRequest>,
+    State(pool): State<DbPool>,
+    Json(payload): Json<CreateTodoRequest>,
 ) -> Result<Json<Todo>, StatusCode> {
-    Err(StatusCode::NOT_IMPLEMENTED)
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let todo = todos::create(
+        &mut conn,
+        &payload.title,
+        payload.description.as_deref(),
+        payload.due_date,
+        payload.link.as_deref(),
+        payload.category_id,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(todo))
 }
 
 pub async fn update_todo(
-    Path(_id): Path<Uuid>,
-    Json(_payload): Json<UpdateTodoRequest>,
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateTodoRequest>,
 ) -> Result<Json<Todo>, StatusCode> {
-    Err(StatusCode::NOT_IMPLEMENTED)
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let todo = todos::update(
+        &mut conn,
+        id,
+        payload.title.as_deref(),
+        payload.description.as_deref(),
+        payload.completed,
+        payload.due_date,
+        payload.link.as_deref(),
+        payload.category_id,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(todo))
 }
 
-pub async fn delete_todo(Path(_id): Path<Uuid>) -> Result<StatusCode, StatusCode> {
-    Err(StatusCode::NOT_IMPLEMENTED)
+pub async fn delete_todo(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    todos::delete(&mut conn, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // Email account handlers
@@ -252,23 +310,72 @@ pub async fn gmail_oauth_callback(
 }
 
 // Category handlers
-pub async fn list_categories() -> Result<Json<Vec<Category>>, StatusCode> {
-    Ok(Json(vec![]))
+pub async fn list_categories(
+    State(pool): State<DbPool>,
+) -> Result<Json<Vec<Category>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let items = categories::list_all(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to list categories: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(items))
 }
 
 pub async fn create_category(
-    Json(_payload): Json<CreateCategoryRequest>,
+    State(pool): State<DbPool>,
+    Json(payload): Json<CreateCategoryRequest>,
 ) -> Result<Json<Category>, StatusCode> {
-    Err(StatusCode::NOT_IMPLEMENTED)
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let category = categories::create(&mut conn, &payload.name, payload.color.as_deref())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(category))
 }
 
 pub async fn update_category(
-    Path(_id): Path<Uuid>,
-    Json(_payload): Json<UpdateCategoryRequest>,
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateCategoryRequest>,
 ) -> Result<Json<Category>, StatusCode> {
-    Err(StatusCode::NOT_IMPLEMENTED)
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let category = categories::update(
+        &mut conn,
+        id,
+        payload.name.as_deref(),
+        payload.color.as_deref(),
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(category))
 }
 
-pub async fn delete_category(Path(_id): Path<Uuid>) -> Result<StatusCode, StatusCode> {
-    Err(StatusCode::NOT_IMPLEMENTED)
+pub async fn delete_category(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    categories::delete(&mut conn, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

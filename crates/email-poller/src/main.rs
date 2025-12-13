@@ -1,192 +1,156 @@
 use anyhow::{Context, Result};
-use diesel::prelude::*;
-use diesel_async::{pooled_connection::deadpool::Pool, AsyncPgConnection, RunQueryDsl};
-use tokio::time::{interval, Duration};
+use clap::Parser;
+use email_poller::config::Config;
+use email_poller::service::{
+    create_archive_watcher, poll_account, process_archive_file, process_archive_queue, RateLimiter,
+    UidTracker,
+};
+use std::fs;
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::time::interval;
 
-mod gmail_client;
-mod processor;
-mod schema;
-
-use gmail_client::GmailClient;
-use processor::process_email_to_todo;
-use shared_types::EmailAccount;
-
-type DbPool = Pool<AsyncPgConnection>;
+#[derive(Parser)]
+#[command(name = "email-poller")]
+#[command(about = "Poll IMAP mailboxes for new emails and archive processed ones")]
+struct Cli {
+    /// Path to the TOML configuration file
+    #[arg(short, long, default_value = "email-poller.toml")]
+    config: PathBuf,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
 
-    tracing::info!("Starting email poller service");
+    let cli = Cli::parse();
 
-    // Establish database connection
-    let pool = establish_connection_pool()?;
-
-    let mut interval = interval(Duration::from_secs(300));
-
-    loop {
-        interval.tick().await;
-
-        if let Err(e) = poll_emails(&pool).await {
-            tracing::error!("Error polling emails: {}", e);
-        }
-    }
-}
-
-fn establish_connection_pool() -> Result<DbPool> {
-    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
-
-    let config =
-        diesel_async::pooled_connection::AsyncDieselConnectionManager::<AsyncPgConnection>::new(
-            database_url,
-        );
-    let pool = Pool::builder(config).build()?;
-
-    Ok(pool)
-}
-
-async fn poll_emails(pool: &DbPool) -> Result<()> {
-    tracing::info!("Polling emails from all accounts...");
-
-    let mut conn = pool.get().await.context("Failed to get DB connection")?;
-
-    // Get all active email accounts
-    let accounts = get_active_accounts(&mut conn).await?;
-
-    tracing::info!("Found {} active email accounts", accounts.len());
-
-    for account in accounts {
-        if let Err(e) = poll_account(&mut conn, &account).await {
-            tracing::error!(
-                "Failed to poll account {} ({}): {}",
-                account.account_name,
-                account.email_address,
-                e
-            );
-
-            // Update sync status to failed
-            update_account_sync_status(&mut conn, account.id, "failed", Some(&e.to_string()), None)
-                .await
-                .ok();
-        }
-    }
-
-    Ok(())
-}
-
-async fn get_active_accounts(conn: &mut AsyncPgConnection) -> Result<Vec<EmailAccount>> {
-    use schema::email_accounts::dsl::*;
-
-    let accounts = email_accounts
-        .filter(is_active.eq(true))
-        .filter(oauth_refresh_token.is_not_null())
-        .order_by(last_synced.asc().nulls_first())
-        .load::<EmailAccount>(conn)
-        .await?;
-
-    Ok(accounts)
-}
-
-async fn poll_account(conn: &mut AsyncPgConnection, account: &EmailAccount) -> Result<()> {
-    tracing::info!(
-        "Polling account: {} ({})",
-        account.account_name,
-        account.email_address
-    );
-
-    // Update status to syncing
-    update_account_sync_status(conn, account.id, "syncing", None, None).await?;
-
-    // Create Gmail client
-    let client = GmailClient::new(account)
-        .await
-        .context("Failed to create Gmail client")?;
-
-    // Fetch emails
-    let emails = if let Some(last_msg_id) = &account.last_message_id {
-        client.fetch_emails_since(last_msg_id, 50).await?
+    // Load config
+    let config = if cli.config.exists() {
+        tracing::info!("Loading config from {}", cli.config.display());
+        Config::load(&cli.config)?
     } else {
-        client.fetch_recent_emails(10).await?
+        anyhow::bail!(
+            "Config file not found: {}. Create one or specify with --config",
+            cli.config.display()
+        );
     };
 
+    tracing::info!("Email Poller Service starting");
+    tracing::info!("  Inbox dir: {}", config.inbox_dir.display());
     tracing::info!(
-        "Found {} new emails for {}",
-        emails.len(),
-        account.email_address
+        "  Archive queue dir: {}",
+        config.archive_queue_dir.display()
     );
-
-    // Process emails into todos
-    let mut last_message_id = account.last_message_id.clone();
-    for email in &emails {
-        if let Some(todo) = process_email_to_todo(email, account) {
-            // Insert todo into database
-            if let Err(e) = insert_todo(conn, &todo, account.id).await {
-                tracing::error!("Failed to insert todo from email {}: {}", email.id, e);
-            } else {
-                tracing::info!("Created todo from email: {}", email.subject);
-            }
-        }
-
-        // Track the latest message ID
-        last_message_id = Some(email.id.clone());
+    tracing::info!("  Accounts: {}", config.accounts.len());
+    tracing::info!(
+        "  Rate limit: {}s, Max fetch: {}",
+        config.rate_limit_secs,
+        config.max_fetch_per_poll
+    );
+    for account in &config.accounts {
+        tracing::info!("    - {} ({})", account.name, account.email);
     }
 
-    // Update sync status to success
-    update_account_sync_status(
-        conn,
-        account.id,
-        "success",
-        None,
-        last_message_id.as_deref(),
-    )
-    .await?;
+    // Create directories
+    fs::create_dir_all(&config.inbox_dir).context("Failed to create inbox directory")?;
+    fs::create_dir_all(&config.archive_queue_dir)
+        .context("Failed to create archive queue directory")?;
 
-    Ok(())
-}
+    // Process any existing files in archive queue on startup
+    match process_archive_queue(&config).await {
+        Ok(count) if count > 0 => {
+            tracing::info!("Processed {} existing files in archive queue", count);
+        }
+        Err(e) => {
+            tracing::error!("Failed to process existing archive queue: {}", e);
+        }
+        _ => {}
+    }
 
-async fn update_account_sync_status(
-    conn: &mut AsyncPgConnection,
-    account_id: uuid::Uuid,
-    status: &str,
-    error: Option<&str>,
-    last_msg_id: Option<&str>,
-) -> Result<()> {
-    use schema::email_accounts::dsl::*;
+    // Set up file watcher for archive queue
+    let (_watcher, archive_rx) = create_archive_watcher(&config.archive_queue_dir)
+        .context("Failed to create archive watcher")?;
+    tracing::info!(
+        "Watching {} for files to archive",
+        config.archive_queue_dir.display()
+    );
 
-    diesel::update(email_accounts.filter(id.eq(account_id)))
-        .set((
-            sync_status.eq(status),
-            last_sync_error.eq(error),
-            last_message_id.eq(last_msg_id),
-            last_synced.eq(Some(chrono::Utc::now())),
-        ))
-        .execute(conn)
-        .await?;
+    // Spawn archive processor as a separate task
+    let config_clone = config.clone();
+    tokio::spawn(async move {
+        loop {
+            // Check for archive events every 500ms
+            tokio::time::sleep(Duration::from_millis(500)).await;
 
-    Ok(())
-}
+            while let Ok(path) = archive_rx.try_recv() {
+                tracing::debug!("Archive event: {}", path.display());
+                // Small delay to ensure file is fully written
+                tokio::time::sleep(Duration::from_millis(100)).await;
 
-async fn insert_todo(
-    conn: &mut AsyncPgConnection,
-    todo: &shared_types::Todo,
-    account_id: uuid::Uuid,
-) -> Result<()> {
-    use schema::todos::dsl::*;
+                match process_archive_file(&config_clone, &path).await {
+                    Ok(true) => {
+                        tracing::info!("Archived: {}", path.display());
+                    }
+                    Ok(false) => {
+                        tracing::debug!("Skipped: {}", path.display());
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to archive {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+    });
 
-    diesel::insert_into(todos)
-        .values((
-            title.eq(&todo.title),
-            description.eq(&todo.description),
-            completed.eq(false),
-            source.eq("email"),
-            source_id.eq(Some(account_id.to_string())),
-            due_date.eq(todo.due_date),
-            created_at.eq(chrono::Utc::now()),
-            updated_at.eq(chrono::Utc::now()),
-        ))
-        .execute(conn)
-        .await?;
+    // State
+    let mut rate_limiter = RateLimiter::new();
+    let mut uid_tracker = UidTracker::new();
 
-    Ok(())
+    // Poll interval for fetching new emails
+    let mut poll_interval = interval(Duration::from_secs(config.poll_interval_secs));
+
+    tracing::info!(
+        "Service running. Poll interval: {}s",
+        config.poll_interval_secs
+    );
+
+    loop {
+        poll_interval.tick().await;
+
+        for account in &config.accounts {
+            // Check rate limit
+            if !rate_limiter.can_poll(&account.email, config.rate_limit_secs) {
+                let wait =
+                    rate_limiter.seconds_until_allowed(&account.email, config.rate_limit_secs);
+                tracing::debug!(
+                    "Rate limited: {} ({}s until next poll)",
+                    account.email,
+                    wait
+                );
+                continue;
+            }
+
+            match poll_account(
+                account,
+                &config.inbox_dir,
+                config.max_fetch_per_poll,
+                &mut uid_tracker,
+            )
+            .await
+            {
+                Ok(count) => {
+                    rate_limiter.record_poll(&account.email);
+                    if count > 0 {
+                        tracing::info!("Downloaded {} new emails from {}", count, account.email);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to poll {}: {}", account.email, e);
+                    rate_limiter.record_poll(&account.email);
+                }
+            }
+        }
+    }
 }

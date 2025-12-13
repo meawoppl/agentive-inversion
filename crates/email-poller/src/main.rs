@@ -2,17 +2,19 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use email_poller::config::Config;
 use email_poller::service::{
-    create_archive_watcher, poll_account, process_archive_file, process_archive_queue, RateLimiter,
-    UidTracker,
+    create_archive_watcher, is_auth_error, poll_account, process_archive_file,
+    process_archive_queue, AccountState, RateLimiter,
 };
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 
 #[derive(Parser)]
 #[command(name = "email-poller")]
-#[command(about = "Poll IMAP mailboxes for new emails and archive processed ones")]
+#[command(about = "Poll Gmail accounts for new emails using OAuth")]
 struct Cli {
     /// Path to the TOML configuration file
     #[arg(short, long, default_value = "email-poller.toml")]
@@ -31,11 +33,11 @@ async fn main() -> Result<()> {
         tracing::info!("Loading config from {}", cli.config.display());
         Config::load(&cli.config)?
     } else {
-        anyhow::bail!(
-            "Config file not found: {}. Create one or specify with --config",
-            cli.config.display()
-        );
+        tracing::info!("No config file found, using defaults");
+        Config::example()
     };
+
+    let config = Arc::new(config);
 
     tracing::info!("Email Poller Service starting");
     tracing::info!("  Inbox dir: {}", config.inbox_dir.display());
@@ -43,12 +45,17 @@ async fn main() -> Result<()> {
         "  Archive queue dir: {}",
         config.archive_queue_dir.display()
     );
-    tracing::info!("  Accounts: {}", config.accounts.len());
     tracing::info!(
         "  Rate limit: {}s, Max fetch: {}",
         config.rate_limit_secs,
         config.max_fetch_per_poll
     );
+    tracing::info!("  Configured accounts: {}", config.accounts.len());
+
+    if config.accounts.is_empty() {
+        tracing::warn!("No accounts configured. Add accounts to the config file.");
+    }
+
     for account in &config.accounts {
         tracing::info!("    - {} ({})", account.name, account.email);
     }
@@ -59,7 +66,7 @@ async fn main() -> Result<()> {
         .context("Failed to create archive queue directory")?;
 
     // Process any existing files in archive queue on startup
-    match process_archive_queue(&config).await {
+    match process_archive_queue(&config, &config.archive_queue_dir).await {
         Ok(count) if count > 0 => {
             tracing::info!("Processed {} existing files in archive queue", count);
         }
@@ -78,15 +85,13 @@ async fn main() -> Result<()> {
     );
 
     // Spawn archive processor as a separate task
-    let config_clone = config.clone();
+    let config_clone = Arc::clone(&config);
     tokio::spawn(async move {
         loop {
-            // Check for archive events every 500ms
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             while let Ok(path) = archive_rx.try_recv() {
                 tracing::debug!("Archive event: {}", path.display());
-                // Small delay to ensure file is fully written
                 tokio::time::sleep(Duration::from_millis(100)).await;
 
                 match process_archive_file(&config_clone, &path).await {
@@ -104,9 +109,9 @@ async fn main() -> Result<()> {
         }
     });
 
-    // State
+    // State tracking for each account
+    let mut account_states: HashMap<String, AccountState> = HashMap::new();
     let mut rate_limiter = RateLimiter::new();
-    let mut uid_tracker = UidTracker::new();
 
     // Poll interval for fetching new emails
     let mut poll_interval = interval(Duration::from_secs(config.poll_interval_secs));
@@ -118,6 +123,11 @@ async fn main() -> Result<()> {
 
     loop {
         poll_interval.tick().await;
+
+        if config.accounts.is_empty() {
+            tracing::debug!("No accounts configured");
+            continue;
+        }
 
         for account in &config.accounts {
             // Check rate limit
@@ -132,23 +142,38 @@ async fn main() -> Result<()> {
                 continue;
             }
 
-            match poll_account(
-                account,
-                &config.inbox_dir,
-                config.max_fetch_per_poll,
-                &mut uid_tracker,
-            )
-            .await
-            {
-                Ok(count) => {
+            // Get or create account state
+            let state = account_states.entry(account.email.clone()).or_default();
+
+            match poll_account(account, state, &config.inbox_dir, config.max_fetch_per_poll).await {
+                Ok(result) => {
                     rate_limiter.record_poll(&account.email);
-                    if count > 0 {
-                        tracing::info!("Downloaded {} new emails from {}", count, account.email);
+
+                    // Update state with new history ID
+                    if let Some(history_id) = result.history_id {
+                        state.last_history_id = Some(history_id);
+                    }
+
+                    if result.count > 0 {
+                        tracing::info!(
+                            "Downloaded {} new emails from {}",
+                            result.count,
+                            account.email
+                        );
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to poll {}: {}", account.email, e);
                     rate_limiter.record_poll(&account.email);
+
+                    if is_auth_error(&e) {
+                        tracing::error!(
+                            "Auth error for {} - run the service interactively to re-authenticate: {}",
+                            account.email,
+                            e
+                        );
+                    } else {
+                        tracing::error!("Failed to poll {}: {}", account.email, e);
+                    }
                 }
             }
         }

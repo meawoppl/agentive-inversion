@@ -333,6 +333,120 @@ pub mod todos {
     }
 }
 
+// Email database operations
+#[allow(dead_code)]
+pub mod emails {
+    use super::*;
+    use chrono::DateTime;
+
+    /// Email model matching database schema
+    #[derive(Debug, Clone, Queryable, diesel::Selectable)]
+    #[diesel(table_name = crate::schema::emails)]
+    pub struct Email {
+        pub id: Uuid,
+        pub account_id: Uuid,
+        pub gmail_id: String,
+        pub thread_id: String,
+        pub history_id: Option<i64>,
+        pub subject: String,
+        pub from_address: String,
+        pub from_name: Option<String>,
+        pub to_addresses: Vec<Option<String>>,
+        pub cc_addresses: Option<Vec<Option<String>>>,
+        pub snippet: Option<String>,
+        pub body_text: Option<String>,
+        pub body_html: Option<String>,
+        pub labels: Option<Vec<Option<String>>>,
+        pub has_attachments: bool,
+        pub received_at: DateTime<Utc>,
+        pub fetched_at: DateTime<Utc>,
+        pub processed: bool,
+        pub processed_at: Option<DateTime<Utc>>,
+        pub archived_in_gmail: bool,
+    }
+
+    pub async fn list_all(
+        conn: &mut AsyncPgConnection,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> anyhow::Result<Vec<Email>> {
+        use crate::schema::emails::dsl::*;
+
+        let mut query = emails.order_by(received_at.desc()).into_boxed();
+
+        if let Some(l) = limit {
+            query = query.limit(l);
+        }
+        if let Some(o) = offset {
+            query = query.offset(o);
+        }
+
+        let items = query.load::<Email>(conn).await?;
+        Ok(items)
+    }
+
+    pub async fn get_by_id(conn: &mut AsyncPgConnection, email_id: Uuid) -> anyhow::Result<Email> {
+        use crate::schema::emails::dsl::*;
+
+        let email = emails.filter(id.eq(email_id)).first::<Email>(conn).await?;
+        Ok(email)
+    }
+
+    pub async fn list_by_account(
+        conn: &mut AsyncPgConnection,
+        acc_id: Uuid,
+        limit: Option<i64>,
+    ) -> anyhow::Result<Vec<Email>> {
+        use crate::schema::emails::dsl::*;
+
+        let mut query = emails
+            .filter(account_id.eq(acc_id))
+            .order_by(received_at.desc())
+            .into_boxed();
+
+        if let Some(l) = limit {
+            query = query.limit(l);
+        }
+
+        let items = query.load::<Email>(conn).await?;
+        Ok(items)
+    }
+
+    pub async fn list_unprocessed(
+        conn: &mut AsyncPgConnection,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Email>> {
+        use crate::schema::emails::dsl::*;
+
+        let items = emails
+            .filter(processed.eq(false))
+            .order_by(fetched_at.asc())
+            .limit(limit)
+            .load::<Email>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn count_all(conn: &mut AsyncPgConnection) -> anyhow::Result<i64> {
+        use crate::schema::emails::dsl::*;
+
+        let count: i64 = emails.count().get_result(conn).await?;
+        Ok(count)
+    }
+
+    pub async fn count_unprocessed(conn: &mut AsyncPgConnection) -> anyhow::Result<i64> {
+        use crate::schema::emails::dsl::*;
+
+        let count: i64 = emails
+            .filter(processed.eq(false))
+            .count()
+            .get_result(conn)
+            .await?;
+        Ok(count)
+    }
+}
+
 // Category database operations
 pub mod categories {
     use super::*;

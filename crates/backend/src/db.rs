@@ -37,7 +37,8 @@ async fn establish_tls_connection(config: String) -> diesel::ConnectionResult<As
 }
 
 pub fn establish_connection_pool() -> anyhow::Result<DbPool> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL environment variable must be set"))?;
 
     let mut manager_config = ManagerConfig::default();
     manager_config.custom_setup =

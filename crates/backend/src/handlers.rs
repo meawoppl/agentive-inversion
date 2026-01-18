@@ -164,7 +164,7 @@ pub async fn start_gmail_oauth(
          client_id={}&\
          redirect_uri={}&\
          response_type=code&\
-         scope=https://www.googleapis.com/auth/gmail.readonly&\
+         scope=https://www.googleapis.com/auth/gmail.modify&\
          access_type=offline&\
          state={}",
         urlencoding::encode(&client_id),

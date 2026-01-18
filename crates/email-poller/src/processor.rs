@@ -1,4 +1,4 @@
-use crate::imap_client::EmailMessage;
+use crate::gmail_client::EmailMessage;
 use chrono::Utc;
 use shared_types::Todo;
 use uuid::Uuid;

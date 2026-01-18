@@ -1,4 +1,7 @@
 # Email Poller Configuration
+#
+# This service polls Gmail accounts for new emails using OAuth.
+# Each account needs its own OAuth credentials and token cache file.
 
 # Directory where downloaded emails are stored
 inbox_dir = "./emails/inbox"
@@ -18,16 +21,29 @@ rate_limit_secs = 60
 # Global max fetch: maximum emails to fetch per poll
 max_fetch_per_poll = 50
 
-# Email accounts to poll
-[[accounts]]
-name = "Personal Gmail"
-imap_server = "imap.gmail.com"
-email = "you@gmail.com"
-password = "your-app-password"
+# Gmail accounts to poll
+# Each account uses InstalledFlow OAuth (desktop app style).
+# On first run, the service will open a browser for authentication.
+#
+# To set up:
+# 1. Create OAuth credentials at https://console.cloud.google.com/apis/credentials
+# 2. Download the credentials JSON file
+# 3. Add an account entry below with the path to the credentials file
 
-# Add more accounts as needed:
+[[accounts]]
+name = "Personal"
+email = "your.email@gmail.com"
+credentials_path = "gmail_credentials.json"
+token_cache_path = "gmail_token_personal.json"
+
 # [[accounts]]
-# name = "Work Email"
-# imap_server = "imap.company.com"
-# email = "you@company.com"
-# password = "password"
+# name = "Work"
+# email = "your.work@company.com"
+# credentials_path = "gmail_credentials_work.json"
+# token_cache_path = "gmail_token_work.json"
+
+# Optional: Calendar integration for adding detected events
+# [calendar]
+# credentials_path = "calendar_credentials.json"
+# token_cache_path = "calendar_token_cache.json"
+# calendar_name = "AI - Events"

@@ -23,10 +23,15 @@ pub struct EmailMessage {
     pub thread_id: String,
     pub subject: String,
     pub from: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
     pub snippet: String,
-    pub body: Option<String>,
+    pub body_text: Option<String>,
+    pub body_html: Option<String>,
     pub received_at: Option<DateTime<Utc>>,
     pub history_id: Option<u64>,
+    pub labels: Vec<String>,
+    pub has_attachments: bool,
 }
 
 impl GmailClient {
@@ -193,9 +198,12 @@ impl GmailClient {
         let thread_id = message.thread_id.clone().unwrap_or_default();
         let snippet = message.snippet.clone().unwrap_or_default();
         let history_id = message.history_id;
+        let labels = message.label_ids.clone().unwrap_or_default();
 
         let mut subject = String::new();
         let mut from = String::new();
+        let mut to = Vec::new();
+        let mut cc = Vec::new();
         let mut received_at = None;
 
         if let Some(payload) = &message.payload {
@@ -204,6 +212,16 @@ impl GmailClient {
                     match header.name.as_deref() {
                         Some("Subject") => subject = header.value.clone().unwrap_or_default(),
                         Some("From") => from = header.value.clone().unwrap_or_default(),
+                        Some("To") => {
+                            if let Some(val) = &header.value {
+                                to = Self::parse_address_list(val);
+                            }
+                        }
+                        Some("Cc") => {
+                            if let Some(val) = &header.value {
+                                cc = Self::parse_address_list(val);
+                            }
+                        }
                         Some("Date") => {
                             if let Some(date_str) = &header.value {
                                 received_at = Self::parse_date(date_str);
@@ -215,17 +233,23 @@ impl GmailClient {
             }
         }
 
-        let body = Self::extract_body(&message);
+        let (body_text, body_html) = Self::extract_bodies(&message);
+        let has_attachments = Self::detect_attachments(&message);
 
         EmailMessage {
             id,
             thread_id,
             subject,
             from,
+            to,
+            cc,
             snippet,
-            body,
+            body_text,
+            body_html,
             received_at,
             history_id,
+            labels,
+            has_attachments,
         }
     }
 
@@ -236,42 +260,132 @@ impl GmailClient {
         None
     }
 
-    fn extract_body(message: &Message) -> Option<String> {
-        let payload = message.payload.as_ref()?;
+    /// Parse comma-separated address list from To/Cc headers
+    fn parse_address_list(header_value: &str) -> Vec<String> {
+        header_value
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
 
-        // Check if body data is directly in payload
+    /// Extract both text and HTML bodies from message
+    fn extract_bodies(message: &Message) -> (Option<String>, Option<String>) {
+        let payload = match message.payload.as_ref() {
+            Some(p) => p,
+            None => return (None, None),
+        };
+
+        let mut text_body = None;
+        let mut html_body = None;
+
+        // Check if body data is directly in payload (single-part message)
         if let Some(body) = &payload.body {
             if let Some(data) = &body.data {
-                if let Ok(decoded) =
-                    base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE, data)
-                {
-                    if let Ok(text) = String::from_utf8(decoded) {
-                        return Some(text);
+                if let Some(decoded) = Self::bytes_to_string(data) {
+                    match payload.mime_type.as_deref() {
+                        Some("text/plain") => text_body = Some(decoded),
+                        Some("text/html") => html_body = Some(decoded),
+                        _ => text_body = Some(decoded),
                     }
                 }
             }
         }
 
-        // Check parts for text/plain
+        // Check parts for multipart messages
         if let Some(parts) = &payload.parts {
-            for part in parts {
-                if part.mime_type.as_deref() == Some("text/plain") {
+            Self::extract_bodies_from_parts(parts, &mut text_body, &mut html_body);
+        }
+
+        (text_body, html_body)
+    }
+
+    /// Recursively extract bodies from message parts
+    fn extract_bodies_from_parts(
+        parts: &[google_gmail1::api::MessagePart],
+        text_body: &mut Option<String>,
+        html_body: &mut Option<String>,
+    ) {
+        for part in parts {
+            match part.mime_type.as_deref() {
+                Some("text/plain") if text_body.is_none() => {
                     if let Some(body) = &part.body {
                         if let Some(data) = &body.data {
-                            if let Ok(decoded) = base64::Engine::decode(
-                                &base64::engine::general_purpose::URL_SAFE,
-                                data,
-                            ) {
-                                if let Ok(text) = String::from_utf8(decoded) {
-                                    return Some(text);
-                                }
+                            if let Some(decoded) = Self::bytes_to_string(data) {
+                                *text_body = Some(decoded);
+                            }
+                        }
+                    }
+                }
+                Some("text/html") if html_body.is_none() => {
+                    if let Some(body) = &part.body {
+                        if let Some(data) = &body.data {
+                            if let Some(decoded) = Self::bytes_to_string(data) {
+                                *html_body = Some(decoded);
+                            }
+                        }
+                    }
+                }
+                Some(mime) if mime.starts_with("multipart/") => {
+                    if let Some(nested_parts) = &part.parts {
+                        Self::extract_bodies_from_parts(nested_parts, text_body, html_body);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Convert bytes to UTF-8 string (Gmail API data is already base64-decoded by serde)
+    fn bytes_to_string(data: &[u8]) -> Option<String> {
+        String::from_utf8(data.to_vec()).ok()
+    }
+
+    /// Detect if message has attachments
+    fn detect_attachments(message: &Message) -> bool {
+        let payload = match message.payload.as_ref() {
+            Some(p) => p,
+            None => return false,
+        };
+
+        if let Some(parts) = &payload.parts {
+            return Self::has_attachments_in_parts(parts);
+        }
+
+        false
+    }
+
+    /// Recursively check for attachments in message parts
+    fn has_attachments_in_parts(parts: &[google_gmail1::api::MessagePart]) -> bool {
+        for part in parts {
+            // Check if this part has a filename (indicates attachment)
+            if let Some(filename) = &part.filename {
+                if !filename.is_empty() {
+                    return true;
+                }
+            }
+
+            // Check Content-Disposition header for attachment
+            if let Some(headers) = &part.headers {
+                for header in headers {
+                    if header.name.as_deref() == Some("Content-Disposition") {
+                        if let Some(value) = &header.value {
+                            if value.starts_with("attachment") {
+                                return true;
                             }
                         }
                     }
                 }
             }
+
+            // Recursively check nested parts
+            if let Some(nested_parts) = &part.parts {
+                if Self::has_attachments_in_parts(nested_parts) {
+                    return true;
+                }
+            }
         }
 
-        None
+        false
     }
 }

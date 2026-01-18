@@ -1,8 +1,8 @@
 # Agentive Inversion: Life Management System Specification
 
-**Version**: 1.0.0-draft
+**Version**: 1.1.0
 **Last Updated**: 2026-01-18
-**Status**: Design Phase
+**Status**: Active Development (Phases 1-3 Complete)
 
 ---
 
@@ -23,6 +23,37 @@
 13. [Implementation Phases](#13-implementation-phases)
 14. [Open Questions](#14-open-questions)
 15. [Glossary](#15-glossary)
+
+---
+
+## Current Implementation Status
+
+> **Last Updated:** 2026-01-18
+
+| Phase | Status | Key PRs |
+|-------|--------|---------|
+| Phase 1: Foundation | ✅ Complete | #9, #10, #11, #12 |
+| Phase 2: Review Workflow | ✅ Complete | #41 |
+| Phase 3: Rules Engine | ✅ Complete | #13, #16, #22 |
+| Phase 4: Calendar Integration | 🚧 Not Started | Issue #26 |
+| Phase 5: Chat Interface | 🔄 In Progress | PR #45 |
+| Phase 6: Polish & Intelligence | 🚧 Not Started | - |
+| Infrastructure & DevOps | ✅ Complete | #8, #14, #15, #42-44 |
+
+**What Works Today:**
+- Email polling from Gmail with OAuth2
+- Agent analyzes emails and proposes decisions (create todo, ignore, archive)
+- Users can approve/reject/edit decisions in the UI
+- Rules engine for automatic decision-making
+- Complete email parsing (To, CC, HTML body, labels, attachments)
+- Docker deployment with single container
+- Development environment via dev.sh
+
+**Known Gaps:**
+- Calendar poller not implemented (Issue #26)
+- Deploy workflow is placeholder only (Issue #29)
+- No production migration automation (Issue #32)
+- Chat interface in progress (PR #45)
 
 ---
 
@@ -1695,79 +1726,82 @@ All agent decisions are permanently logged with:
 
 ## 13. Implementation Phases
 
-### Phase 1: Foundation (Weeks 1-2)
+### Phase 1: Foundation ✅ COMPLETE
 
 **Goal:** Make agent decisions visible and auditable
 
 **Database Changes:**
-- [ ] Create `emails` table
-- [ ] Create `agent_decisions` table
-- [ ] Modify `todos` table (add `decision_id`, `priority`, `tags`)
-- [ ] Run migrations
+- [x] Create `emails` table (PR #9)
+- [x] Create `agent_decisions` table (PR #10)
+- [x] Modify `todos` table (add `decision_id`, `priority`, `tags`) (PR #3, #12)
+- [x] Run migrations
 
 **Backend Changes:**
-- [ ] Email poller: Store emails in DB instead of files
-- [ ] Email poller: Create decisions instead of direct todos
-- [ ] Add decision CRUD endpoints
-- [ ] Add email listing endpoints
+- [x] Email poller: Store emails in DB instead of files (PR #9)
+- [x] Email poller: Create decisions instead of direct todos (PR #16)
+- [x] Add decision CRUD endpoints (PR #10)
+- [x] Add email listing endpoints (PR #9)
 
 **Frontend Changes:**
-- [ ] Basic inbox view showing pending decisions
-- [ ] Decision detail view with reasoning
-- [ ] Approve/reject buttons
+- [x] Basic inbox view showing pending decisions (PR #11)
+- [x] Decision detail view with reasoning (PR #11)
+- [x] Approve/reject buttons (PR #11)
 
 **Deliverable:** Users can see why todos were created and approve/reject new ones
 
 ---
 
-### Phase 2: Review Workflow (Weeks 3-4)
+### Phase 2: Review Workflow ✅ COMPLETE
 
 **Goal:** Complete review experience with editing and feedback
 
 **Backend Changes:**
-- [ ] Decision approval with modifications
-- [ ] Decision rejection with feedback
-- [ ] Batch operations (approve all, etc.)
-- [ ] Decision statistics endpoint
+- [x] Decision approval with modifications (PR #41)
+- [x] Decision rejection with feedback (PR #41)
+- [x] Batch operations (approve all, etc.) (PR #41)
+- [x] Decision statistics endpoint (PR #41)
 
 **Frontend Changes:**
-- [ ] Edit proposed action before approval
-- [ ] Feedback form on rejection
-- [ ] Decision log view (audit trail)
-- [ ] Filter/search for decisions
-- [ ] Badge counts in navigation
+- [x] Edit proposed action before approval (PR #41)
+- [x] Feedback form on rejection (PR #41)
+- [x] Decision log view (audit trail) (PR #41)
+- [x] Filter/search for decisions (PR #41)
+- [x] Badge counts in navigation (PR #41)
 
 **Deliverable:** Full decision review workflow with audit trail
 
 ---
 
-### Phase 3: Rules Engine (Weeks 5-6)
+### Phase 3: Rules Engine ✅ COMPLETE
 
 **Goal:** User-defined automation rules
 
 **Database Changes:**
-- [ ] Create `agent_rules` table
-- [ ] Link decisions to rules
+- [x] Create `agent_rules` table (PR #13)
+- [x] Link decisions to rules (PR #16)
 
 **Backend Changes:**
-- [ ] Rule CRUD endpoints
-- [ ] Rule matching engine
-- [ ] "Create rule from decision" flow
-- [ ] Rule testing endpoint
+- [x] Rule CRUD endpoints (PR #13)
+- [x] Rule matching engine (PR #16)
+- [x] "Create rule from decision" flow (PR #16)
+- [x] Rule testing endpoint (PR #16)
+- [x] Regex caching for performance (PR #22)
 
 **Frontend Changes:**
-- [ ] Rules management page
-- [ ] Rule builder UI
-- [ ] "Always do this" checkbox in decision review
-- [ ] Rule match preview
+- [x] Rules management page (PR #13)
+- [x] Rule builder UI (PR #13)
+- [x] "Always do this" checkbox in decision review (PR #41)
+- [x] Rule match preview (PR #16)
 
 **Deliverable:** Users can create rules to automate repetitive decisions
 
 ---
 
-### Phase 4: Calendar Integration (Weeks 7-8)
+### Phase 4: Calendar Integration 🚧 NOT STARTED
 
 **Goal:** Google Calendar events processed like emails
+
+**Status:** Calendar poller exists but is non-functional (see Issue #26). Currently exits immediately with a warning message indicating it needs implementation.
 
 **Database Changes:**
 - [ ] Create `calendar_events` table
@@ -1788,9 +1822,11 @@ All agent decisions are permanently logged with:
 
 ---
 
-### Phase 5: Chat Interface (Weeks 9-10)
+### Phase 5: Chat Interface 🔄 IN PROGRESS
 
 **Goal:** Conversational control of the system
+
+**Status:** PR #45 is open with initial chat interface implementation.
 
 **Database Changes:**
 - [ ] Create `chat_messages` table
@@ -1811,7 +1847,7 @@ All agent decisions are permanently logged with:
 
 ---
 
-### Phase 6: Polish & Intelligence (Weeks 11-12)
+### Phase 6: Polish & Intelligence 🚧 NOT STARTED
 
 **Goal:** Improved UX and smarter analysis
 
@@ -1829,6 +1865,37 @@ All agent decisions are permanently logged with:
 - [ ] Settings page
 
 **Deliverable:** Production-ready application
+
+---
+
+### Infrastructure & DevOps ✅ COMPLETE
+
+**Goal:** Production-ready deployment infrastructure
+
+**Docker & Containers:**
+- [x] Unified single-container Dockerfile (PR #42)
+- [x] docker-compose for local development (DOCKER.md)
+- [x] Container build workflow with GHCR push (PR #15)
+- [x] Health checks and proper startup ordering
+
+**Configuration:**
+- [x] Environment variable validation with helpful errors (PR #39)
+- [x] CORS configuration via CORS_ALLOWED_ORIGINS (PR #38)
+- [x] OAuth redirect URI from environment (PR #36)
+- [x] DATABASE_URL in docker entrypoint (PR #37)
+
+**Development Experience:**
+- [x] dev.sh script for local development (PR #14)
+- [x] Seed data via dev script (PR #43)
+- [x] CI caching for faster builds (PR #8)
+- [x] Pre-commit hooks for fmt/clippy
+
+**Email Parsing:**
+- [x] Complete email parsing: To/CC, HTML body, labels, attachments (PR #44)
+
+**Remaining Deployment Work:**
+- [ ] Real deployment workflow (Issue #29 - currently placeholder)
+- [ ] Production database migration automation (Issue #32)
 
 ---
 

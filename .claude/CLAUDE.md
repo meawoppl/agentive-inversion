@@ -22,6 +22,15 @@ This is a Rust workspace with 5 crates:
 - Run `diesel migration run` after creating new migrations
 - Database URL points to Neon PostgreSQL
 - Schema file is auto-generated at `crates/backend/src/schema.rs`
+- **Avoid JSONB columns** - prefer TEXT columns with JSON strings, or better yet, create proper normalized tables
+- If you need to store structured data, consider creating a separate table with proper columns instead of a JSON blob
+- Only use JSON strings (TEXT) when the schema is truly dynamic or varies per-row
+
+### Type System Patterns
+- **Avoid `serde_json::Value`** - always create proper typed structs for serialization
+- Use strongly typed data structures instead of untyped JSON
+- Only use `serde_json::Value` at API boundaries when parsing/serializing, convert to typed structs immediately
+- Define explicit types for all data structures in `shared-types` crate
 
 ### Frontend Development
 - Use Trunk to build and serve the frontend

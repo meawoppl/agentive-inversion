@@ -4,8 +4,10 @@ use diesel_async::{
     pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager, ManagerConfig},
     AsyncPgConnection, RunQueryDsl,
 };
-use shared_types::{AgentRule, Category, EmailAccount, Todo};
+use shared_types::{AgentDecision, AgentRule, Category, EmailAccount, Todo};
 use uuid::Uuid;
+
+use crate::models::AgentDecisionRow;
 
 pub type DbPool = Pool<AsyncPgConnection>;
 
@@ -524,6 +526,266 @@ pub mod categories {
         use crate::schema::categories::dsl::*;
 
         diesel::delete(categories.filter(id.eq(category_id)))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+}
+
+// Agent decision database operations
+#[allow(dead_code)]
+pub mod decisions {
+    use super::*;
+
+    pub async fn list_all(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<AgentDecision>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let rows = agent_decisions
+            .order_by(created_at.desc())
+            .load::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_pending(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<AgentDecision>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let rows = agent_decisions
+            .filter(status.eq("proposed"))
+            .order_by(created_at.desc())
+            .load::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_by_status(
+        conn: &mut AsyncPgConnection,
+        status_filter: &str,
+    ) -> anyhow::Result<Vec<AgentDecision>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let rows = agent_decisions
+            .filter(status.eq(status_filter))
+            .order_by(created_at.desc())
+            .load::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_by_source(
+        conn: &mut AsyncPgConnection,
+        source_type_filter: &str,
+    ) -> anyhow::Result<Vec<AgentDecision>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let rows = agent_decisions
+            .filter(source_type.eq(source_type_filter))
+            .order_by(created_at.desc())
+            .load::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn get_by_id(
+        conn: &mut AsyncPgConnection,
+        decision_id: Uuid,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = agent_decisions
+            .filter(id.eq(decision_id))
+            .first::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create(
+        conn: &mut AsyncPgConnection,
+        source_type_val: &str,
+        source_id_val: Option<Uuid>,
+        source_external_id_val: Option<&str>,
+        decision_type_val: &str,
+        proposed_action_val: serde_json::Value,
+        reasoning_val: &str,
+        reasoning_details_val: Option<serde_json::Value>,
+        confidence_val: f32,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        // Serialize JSON values to strings for TEXT storage
+        let proposed_action_str = serde_json::to_string(&proposed_action_val)?;
+        let reasoning_details_str = reasoning_details_val
+            .map(|v| serde_json::to_string(&v))
+            .transpose()?;
+
+        let row = diesel::insert_into(agent_decisions)
+            .values((
+                source_type.eq(source_type_val),
+                source_id.eq(source_id_val),
+                source_external_id.eq(source_external_id_val),
+                decision_type.eq(decision_type_val),
+                proposed_action.eq(proposed_action_str),
+                reasoning.eq(reasoning_val),
+                reasoning_details.eq(reasoning_details_str),
+                confidence.eq(confidence_val),
+                status.eq("proposed"),
+            ))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
+    pub async fn approve(
+        conn: &mut AsyncPgConnection,
+        decision_id: Uuid,
+        todo_id: Option<Uuid>,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
+            .set((
+                status.eq("approved"),
+                result_todo_id.eq(todo_id),
+                reviewed_at.eq(Some(Utc::now())),
+            ))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
+    pub async fn reject(
+        conn: &mut AsyncPgConnection,
+        decision_id: Uuid,
+        feedback: Option<&str>,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
+            .set((
+                status.eq("rejected"),
+                user_feedback.eq(feedback),
+                reviewed_at.eq(Some(Utc::now())),
+            ))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
+    pub async fn mark_executed(
+        conn: &mut AsyncPgConnection,
+        decision_id: Uuid,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
+            .set((status.eq("executed"), executed_at.eq(Some(Utc::now()))))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
+    pub async fn mark_failed(
+        conn: &mut AsyncPgConnection,
+        decision_id: Uuid,
+        error_msg: &str,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
+            .set((
+                status.eq("failed"),
+                user_feedback.eq(Some(error_msg)),
+                executed_at.eq(Some(Utc::now())),
+            ))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
+    pub async fn auto_approve(
+        conn: &mut AsyncPgConnection,
+        decision_id: Uuid,
+        rule_id: Uuid,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
+            .set((
+                status.eq("auto_approved"),
+                applied_rule_id.eq(Some(rule_id)),
+                reviewed_at.eq(Some(Utc::now())),
+            ))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
+    pub async fn get_stats(
+        conn: &mut AsyncPgConnection,
+    ) -> anyhow::Result<shared_types::DecisionStats> {
+        use crate::schema::agent_decisions::dsl::*;
+        use diesel::dsl::count_star;
+
+        let total: i64 = agent_decisions.select(count_star()).first(conn).await?;
+
+        let pending_count: i64 = agent_decisions
+            .filter(status.eq("proposed"))
+            .select(count_star())
+            .first(conn)
+            .await?;
+
+        let approved_count: i64 = agent_decisions
+            .filter(status.eq("approved").or(status.eq("executed")))
+            .select(count_star())
+            .first(conn)
+            .await?;
+
+        let rejected_count: i64 = agent_decisions
+            .filter(status.eq("rejected"))
+            .select(count_star())
+            .first(conn)
+            .await?;
+
+        let auto_approved_count: i64 = agent_decisions
+            .filter(status.eq("auto_approved"))
+            .select(count_star())
+            .first(conn)
+            .await?;
+
+        // Calculate average confidence
+        let avg_confidence: Option<f32> = agent_decisions
+            .select(diesel::dsl::avg(confidence))
+            .first::<Option<f64>>(conn)
+            .await?
+            .map(|v| v as f32);
+
+        Ok(shared_types::DecisionStats {
+            total,
+            pending: pending_count,
+            approved: approved_count,
+            rejected: rejected_count,
+            auto_approved: auto_approved_count,
+            average_confidence: avg_confidence.unwrap_or(0.0),
+        })
+    }
+
+    pub async fn delete(conn: &mut AsyncPgConnection, decision_id: Uuid) -> anyhow::Result<()> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        diesel::delete(agent_decisions.filter(id.eq(decision_id)))
             .execute(conn)
             .await?;
 

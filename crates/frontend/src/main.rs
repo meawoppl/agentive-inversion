@@ -1,5 +1,7 @@
 use gloo_net::http::Request;
-use shared_types::{Category, EmailResponse, Todo};
+use shared_types::{Category, CreateTodoRequest, EmailResponse, Todo, UpdateTodoRequest};
+use uuid::Uuid;
+use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
 #[derive(Clone, PartialEq)]
@@ -11,8 +13,6 @@ enum View {
 
 #[function_component(App)]
 fn app() -> Html {
-    let todos = use_state(Vec::<Todo>::new);
-    let categories = use_state(Vec::<Category>::new);
     let current_view = use_state(|| View::Inbox);
 
     let set_view_inbox = {
@@ -58,8 +58,8 @@ fn app() -> Html {
             <main>
                 {match &*current_view {
                     View::Inbox => html! { <EmailInbox /> },
-                    View::Todos => html! { <TodoList todos={(*todos).clone()} categories={(*categories).clone()} /> },
-                    View::Categories => html! { <CategoryManager categories={(*categories).clone()} /> },
+                    View::Todos => html! { <TodoList /> },
+                    View::Categories => html! { <CategoryManager /> },
                 }}
             </main>
         </div>
@@ -173,123 +173,402 @@ fn email_inbox() -> Html {
     }
 }
 
-#[derive(Properties, PartialEq)]
-struct TodoListProps {
-    todos: Vec<Todo>,
-    categories: Vec<Category>,
-}
-
 #[function_component(TodoList)]
-fn todo_list(props: &TodoListProps) -> Html {
-    // Sort todos by due date (nulls last)
-    let mut sorted_todos = props.todos.clone();
-    sorted_todos.sort_by(|a, b| match (&a.due_date, &b.due_date) {
-        (Some(date_a), Some(date_b)) => date_a.cmp(date_b),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
+fn todo_list() -> Html {
+    let todos = use_state(Vec::<Todo>::new);
+    let categories = use_state(Vec::<Category>::new);
+    let loading = use_state(|| true);
+    let error = use_state(|| None::<String>);
+    let new_title = use_state(String::new);
+    let refresh_trigger = use_state(|| 0u32);
+
+    // Fetch todos and categories
+    {
+        let todos = todos.clone();
+        let categories = categories.clone();
+        let loading = loading.clone();
+        let error = error.clone();
+        let refresh_trigger = *refresh_trigger;
+
+        use_effect_with(refresh_trigger, move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                // Fetch todos
+                match Request::get("/api/todos").send().await {
+                    Ok(response) => {
+                        if response.ok() {
+                            match response.json::<Vec<Todo>>().await {
+                                Ok(data) => todos.set(data),
+                                Err(e) => {
+                                    error.set(Some(format!("Failed to parse todos: {}", e)));
+                                }
+                            }
+                        } else {
+                            error.set(Some(format!("API error: {}", response.status())));
+                        }
+                    }
+                    Err(e) => {
+                        error.set(Some(format!("Network error: {}", e)));
+                    }
+                }
+
+                // Fetch categories
+                if let Ok(response) = Request::get("/api/categories").send().await {
+                    if response.ok() {
+                        if let Ok(data) = response.json::<Vec<Category>>().await {
+                            categories.set(data);
+                        }
+                    }
+                }
+
+                loading.set(false);
+            });
+            || ()
+        });
+    }
+
+    let on_title_input = {
+        let new_title = new_title.clone();
+        Callback::from(move |e: InputEvent| {
+            let input: HtmlInputElement = e.target_unchecked_into();
+            new_title.set(input.value());
+        })
+    };
+
+    let on_create = {
+        let new_title = new_title.clone();
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |e: SubmitEvent| {
+            e.prevent_default();
+            let title = (*new_title).clone();
+            if title.is_empty() {
+                return;
+            }
+            let new_title = new_title.clone();
+            let refresh_trigger = refresh_trigger.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = CreateTodoRequest {
+                    title,
+                    description: None,
+                    due_date: None,
+                    link: None,
+                    category_id: None,
+                };
+                if let Ok(response) = Request::post("/api/todos")
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .unwrap()
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        new_title.set(String::new());
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    let toggle_complete = {
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |(id, completed): (Uuid, bool)| {
+            let refresh_trigger = refresh_trigger.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = UpdateTodoRequest {
+                    title: None,
+                    description: None,
+                    completed: Some(!completed),
+                    due_date: None,
+                    link: None,
+                    category_id: None,
+                };
+                if let Ok(response) = Request::put(&format!("/api/todos/{}", id))
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .unwrap()
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    let delete_todo = {
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |id: Uuid| {
+            let refresh_trigger = refresh_trigger.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(response) = Request::delete(&format!("/api/todos/{}", id)).send().await {
+                    if response.ok() {
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    if *loading {
+        return html! {
+            <div class="todo-container">
+                <h2>{"Todos"}</h2>
+                <p class="loading">{"Loading todos..."}</p>
+            </div>
+        };
+    }
+
+    if let Some(err) = &*error {
+        return html! {
+            <div class="todo-container">
+                <h2>{"Todos"}</h2>
+                <p class="error">{err}</p>
+            </div>
+        };
+    }
+
+    // Sort todos by due date (nulls last), then by completed status
+    let mut sorted_todos = (*todos).clone();
+    sorted_todos.sort_by(|a, b| match (a.completed, b.completed) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => match (&a.due_date, &b.due_date) {
+            (Some(date_a), Some(date_b)) => date_a.cmp(date_b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        },
     });
 
+    let categories_list = (*categories).clone();
+
     html! {
-        <div class="todo-list">
-            {
-                if sorted_todos.is_empty() {
-                    html! { <p>{"No todos yet!"}</p> }
+        <div class="todo-container">
+            <h2>{"Todos"}</h2>
+            <form class="todo-form" onsubmit={on_create}>
+                <input
+                    type="text"
+                    placeholder="Add a new todo..."
+                    value={(*new_title).clone()}
+                    oninput={on_title_input}
+                />
+                <button type="submit">{"Add"}</button>
+            </form>
+            <p class="todo-count">{format!("{} todos", sorted_todos.len())}</p>
+            <div class="todo-list">
+                {if sorted_todos.is_empty() {
+                    html! { <p class="empty-state">{"No todos yet! Add one above."}</p> }
                 } else {
                     sorted_todos.iter().map(|todo| {
                         let category = todo.category_id
-                            .and_then(|cat_id| props.categories.iter().find(|c| c.id == cat_id));
+                            .and_then(|cat_id| categories_list.iter().find(|c| c.id == cat_id));
+                        let todo_id = todo.id;
+                        let todo_completed = todo.completed;
+                        let toggle = toggle_complete.clone();
+                        let delete = delete_todo.clone();
 
                         html! {
-                            <div key={todo.id.to_string()} class="todo-item">
-                                <h3>{&todo.title}</h3>
-                                {
-                                    if let Some(desc) = &todo.description {
-                                        html! { <p class="description">{desc}</p> }
-                                    } else {
-                                        html! {}
+                            <div key={todo.id.to_string()} class={format!("todo-item {}", if todo.completed { "completed" } else { "" })}>
+                                <div class="todo-header">
+                                    <input
+                                        type="checkbox"
+                                        checked={todo.completed}
+                                        onchange={Callback::from(move |_| toggle.emit((todo_id, todo_completed)))}
+                                    />
+                                    <h3 class={if todo.completed { "strikethrough" } else { "" }}>{&todo.title}</h3>
+                                </div>
+                                {if let Some(desc) = &todo.description {
+                                    html! { <p class="description">{desc}</p> }
+                                } else {
+                                    html! {}
+                                }}
+                                {if let Some(due) = &todo.due_date {
+                                    html! {
+                                        <p class="due-date">
+                                            {"Due: "}
+                                            {due.format("%Y-%m-%d %H:%M").to_string()}
+                                        </p>
                                     }
-                                }
-                                {
-                                    if let Some(due) = &todo.due_date {
-                                        html! {
-                                            <p class="due-date">
-                                                {"Due: "}
-                                                {due.format("%Y-%m-%d %H:%M").to_string()}
-                                            </p>
-                                        }
-                                    } else {
-                                        html! {}
+                                } else {
+                                    html! {}
+                                }}
+                                {if let Some(link) = &todo.link {
+                                    html! {
+                                        <p class="link">
+                                            <a href={link.clone()} target="_blank">{"View Link"}</a>
+                                        </p>
                                     }
-                                }
-                                {
-                                    if let Some(link) = &todo.link {
+                                } else {
+                                    html! {}
+                                }}
+                                <div class="todo-footer">
+                                    {if let Some(cat) = category {
                                         html! {
-                                            <p class="link">
-                                                <a href={link.clone()} target="_blank">{"View Link"}</a>
-                                            </p>
-                                        }
-                                    } else {
-                                        html! {}
-                                    }
-                                }
-                                {
-                                    if let Some(cat) = category {
-                                        html! {
-                                            <span class="category" style={format!("background-color: {}", cat.color.as_deref().unwrap_or("#cccccc"))}>
+                                            <span class="category-badge" style={format!("background-color: {}", cat.color.as_deref().unwrap_or("#cccccc"))}>
                                                 {&cat.name}
                                             </span>
                                         }
                                     } else {
                                         html! {}
-                                    }
-                                }
+                                    }}
+                                    <button class="delete-btn" onclick={Callback::from(move |_| delete.emit(todo_id))}>{"Delete"}</button>
+                                </div>
                             </div>
                         }
                     }).collect::<Html>()
-                }
-            }
+                }}
+            </div>
         </div>
     }
 }
 
-#[derive(Properties, PartialEq)]
-struct CategoryManagerProps {
-    categories: Vec<Category>,
-}
-
 #[function_component(CategoryManager)]
-fn category_manager(props: &CategoryManagerProps) -> Html {
+fn category_manager() -> Html {
+    let categories = use_state(Vec::<Category>::new);
+    let loading = use_state(|| true);
+    let new_name = use_state(String::new);
+    let new_color = use_state(|| "#3498db".to_string());
+    let refresh_trigger = use_state(|| 0u32);
+
+    // Fetch categories
+    {
+        let categories = categories.clone();
+        let loading = loading.clone();
+        let refresh_trigger = *refresh_trigger;
+
+        use_effect_with(refresh_trigger, move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(response) = Request::get("/api/categories").send().await {
+                    if response.ok() {
+                        if let Ok(data) = response.json::<Vec<Category>>().await {
+                            categories.set(data);
+                        }
+                    }
+                }
+                loading.set(false);
+            });
+            || ()
+        });
+    }
+
+    let on_name_input = {
+        let new_name = new_name.clone();
+        Callback::from(move |e: InputEvent| {
+            let input: HtmlInputElement = e.target_unchecked_into();
+            new_name.set(input.value());
+        })
+    };
+
+    let on_color_input = {
+        let new_color = new_color.clone();
+        Callback::from(move |e: InputEvent| {
+            let input: HtmlInputElement = e.target_unchecked_into();
+            new_color.set(input.value());
+        })
+    };
+
+    let on_create = {
+        let new_name = new_name.clone();
+        let new_color = new_color.clone();
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |e: SubmitEvent| {
+            e.prevent_default();
+            let name = (*new_name).clone();
+            if name.is_empty() {
+                return;
+            }
+            let color = (*new_color).clone();
+            let new_name = new_name.clone();
+            let refresh_trigger = refresh_trigger.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let body = serde_json::json!({
+                    "name": name,
+                    "color": color
+                });
+                if let Ok(response) = Request::post("/api/categories")
+                    .header("Content-Type", "application/json")
+                    .body(body.to_string())
+                    .unwrap()
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        new_name.set(String::new());
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    let delete_category = {
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |id: Uuid| {
+            let refresh_trigger = refresh_trigger.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(response) = Request::delete(&format!("/api/categories/{}", id))
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    if *loading {
+        return html! {
+            <div class="category-manager">
+                <h2>{"Manage Categories"}</h2>
+                <p class="loading">{"Loading categories..."}</p>
+            </div>
+        };
+    }
+
+    let categories_list = (*categories).clone();
+
     html! {
         <div class="category-manager">
             <h2>{"Manage Categories"}</h2>
-            <div class="category-list">
-                {
-                    if props.categories.is_empty() {
-                        html! { <p>{"No categories yet!"}</p> }
-                    } else {
-                        props.categories.iter().map(|category| {
-                            html! {
-                                <div key={category.id.to_string()} class="category-item">
-                                    <div
-                                        class="category-color"
-                                        style={format!("background-color: {}", category.color.as_deref().unwrap_or("#cccccc"))}
-                                    />
-                                    <span class="category-name">{&category.name}</span>
-                                    <button class="delete-btn">{"Delete"}</button>
-                                </div>
-                            }
-                        }).collect::<Html>()
-                    }
-                }
-            </div>
             <div class="add-category">
-                <h3>{"Add New Category"}</h3>
-                <form>
-                    <input type="text" placeholder="Category name" />
-                    <input type="color" />
+                <form onsubmit={on_create}>
+                    <input
+                        type="text"
+                        placeholder="Category name"
+                        value={(*new_name).clone()}
+                        oninput={on_name_input}
+                    />
+                    <input
+                        type="color"
+                        value={(*new_color).clone()}
+                        oninput={on_color_input}
+                    />
                     <button type="submit">{"Add Category"}</button>
                 </form>
+            </div>
+            <div class="category-list">
+                {if categories_list.is_empty() {
+                    html! { <p class="empty-state">{"No categories yet!"}</p> }
+                } else {
+                    categories_list.iter().map(|category| {
+                        let cat_id = category.id;
+                        let delete = delete_category.clone();
+                        html! {
+                            <div key={category.id.to_string()} class="category-item">
+                                <div
+                                    class="category-color"
+                                    style={format!("background-color: {}", category.color.as_deref().unwrap_or("#cccccc"))}
+                                />
+                                <span class="category-name">{&category.name}</span>
+                                <button class="delete-btn" onclick={Callback::from(move |_| delete.emit(cat_id))}>{"Delete"}</button>
+                            </div>
+                        }
+                    }).collect::<Html>()
+                }}
             </div>
         </div>
     }

@@ -130,10 +130,8 @@ cargo clippy --workspace         # Lint code
 
 Required variables (see `.env.example`):
 - `DATABASE_URL` - Neon PostgreSQL connection string
-- `GMAIL_CLIENT_ID` - Google OAuth client ID
-- `GMAIL_CLIENT_SECRET` - Google OAuth secret
-- `GOOGLE_CALENDAR_CLIENT_ID` - Calendar API client ID
-- `GOOGLE_CALENDAR_CLIENT_SECRET` - Calendar API secret
+- `GOOGLE_CLIENT_ID` - Google OAuth client ID (used for Gmail and Calendar APIs)
+- `GOOGLE_CLIENT_SECRET` - Google OAuth secret
 - `RUST_LOG` - Logging level (info, debug, etc.)
 
 ## Git Workflow Notes

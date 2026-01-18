@@ -141,7 +141,7 @@ pub async fn start_gmail_oauth(
     Json(payload): Json<ConnectEmailAccountRequest>,
 ) -> Result<Json<OAuthStartResponse>, StatusCode> {
     let client_id =
-        std::env::var("GMAIL_CLIENT_ID").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        std::env::var("GOOGLE_CLIENT_ID").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Create a placeholder email account to track this connection
     let mut conn = pool
@@ -199,12 +199,12 @@ pub async fn gmail_oauth_callback(
         Err(_) => return Redirect::to("/oauth/error?msg=invalid_state").into_response(),
     };
 
-    let client_id = match std::env::var("GMAIL_CLIENT_ID") {
+    let client_id = match std::env::var("GOOGLE_CLIENT_ID") {
         Ok(client_id_str) => client_id_str,
         Err(_) => return Redirect::to("/oauth/error?msg=missing_config").into_response(),
     };
 
-    let client_secret = match std::env::var("GMAIL_CLIENT_SECRET") {
+    let client_secret = match std::env::var("GOOGLE_CLIENT_SECRET") {
         Ok(secret) => secret,
         Err(_) => return Redirect::to("/oauth/error?msg=missing_config").into_response(),
     };

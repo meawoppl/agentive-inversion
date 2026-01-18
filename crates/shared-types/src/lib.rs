@@ -1220,7 +1220,7 @@ mod tests {
 
         // Run multiple times to exercise cache
         for _ in 0..10 {
-            let results = RuleEngine::match_email(&[rule.clone()], &input);
+            let results = RuleEngine::match_email(std::slice::from_ref(&rule), &input);
             assert_eq!(results.len(), 1);
             assert!(results[0].matched);
         }

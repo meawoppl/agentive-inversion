@@ -10,10 +10,9 @@ WORKDIR /app
 # Copy pre-built binary from host
 COPY ./target/release/backend /app/backend
 
-# Copy migrations and seed data
+# Copy migrations
 COPY migrations ./migrations
 COPY diesel.toml ./
-COPY seed-data.sql ./
 
 # Copy startup script
 COPY docker-entrypoint-backend.sh /app/

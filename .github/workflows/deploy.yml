@@ -4,37 +4,26 @@ on:
   push:
     branches: [ main ]
 
+# Deployment notes:
+# - The container image includes diesel_cli for migrations
+# - Migrations run automatically on container startup via entrypoint
+# - Migrations are tracked in __diesel_schema_migrations table
+# - For manual migration: docker exec <container> diesel migration run
+
 jobs:
-  deploy-backend:
-    name: Deploy Backend
+  deploy:
+    name: Deploy Application
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build backend
-        run: cargo build --release --package backend
-
       - name: Deploy placeholder
-        run: echo "Backend deployment would happen here"
-
-  deploy-frontend:
-    name: Deploy Frontend
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install Trunk
-        run: cargo install trunk
-
-      - name: Build frontend
-        run: cd crates/frontend && trunk build --release
-
-      - name: Deploy placeholder
-        run: echo "Frontend deployment would happen here"
+        run: |
+          echo "Deployment steps:"
+          echo "1. Container is built by container.yml workflow"
+          echo "2. Push container to registry"
+          echo "3. Deploy to target environment"
+          echo "4. Migrations run automatically on startup"
+          echo ""
+          echo "Implement actual deployment for your infrastructure here"

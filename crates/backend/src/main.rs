@@ -10,6 +10,7 @@ use tower_http::{
 };
 
 mod db;
+pub mod error;
 mod handlers;
 mod models;
 mod pollers;

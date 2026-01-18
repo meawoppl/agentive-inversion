@@ -7,7 +7,7 @@ use diesel_async::{
 use shared_types::{AgentDecision, AgentRule, Category, ChatMessage, EmailAccount, Todo};
 use uuid::Uuid;
 
-use crate::models::{AgentDecisionRow, NewEmail};
+use crate::models::{AgentDecisionRow, AgentRuleChanges, NewEmail, TodoChanges};
 
 pub type DbPool = Pool<AsyncPgConnection>;
 
@@ -281,47 +281,19 @@ pub mod todos {
     ) -> anyhow::Result<Todo> {
         use crate::schema::todos::dsl::*;
 
-        // Update each field individually if provided
-        if let Some(t) = title_val {
-            diesel::update(todos.filter(id.eq(todo_id)))
-                .set(title.eq(t))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(d) = description_val {
-            diesel::update(todos.filter(id.eq(todo_id)))
-                .set(description.eq(Some(d)))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(c) = completed_val {
-            diesel::update(todos.filter(id.eq(todo_id)))
-                .set(completed.eq(c))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(dd) = due_date_val {
-            diesel::update(todos.filter(id.eq(todo_id)))
-                .set(due_date.eq(Some(dd)))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(l) = link_val {
-            diesel::update(todos.filter(id.eq(todo_id)))
-                .set(link.eq(Some(l)))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(cat) = category_id_val {
-            diesel::update(todos.filter(id.eq(todo_id)))
-                .set(category_id.eq(Some(cat)))
-                .execute(conn)
-                .await?;
-        }
+        // Build changeset with all provided fields in a single update
+        let changes = TodoChanges {
+            title: title_val.map(|s| s.to_string()),
+            description: description_val.map(|s| Some(s.to_string())),
+            completed: completed_val,
+            due_date: due_date_val.map(Some),
+            link: link_val.map(|s| Some(s.to_string())),
+            category_id: category_id_val.map(Some),
+            updated_at: Some(Utc::now()),
+        };
 
-        // Always update updated_at and return the result
         let updated = diesel::update(todos.filter(id.eq(todo_id)))
-            .set(updated_at.eq(Utc::now()))
+            .set(&changes)
             .get_result::<Todo>(conn)
             .await?;
 
@@ -1045,70 +1017,32 @@ pub mod agent_rules {
     ) -> anyhow::Result<AgentRule> {
         use crate::schema::agent_rules::dsl::*;
 
-        if let Some(n) = name_val {
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(name.eq(n))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(d) = description_val {
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(description.eq(Some(d)))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(st) = source_type_val {
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(source_type.eq(st))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(rt) = rule_type_val {
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(rule_type.eq(rt))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(c) = conditions_val {
-            let conditions_json = serde_json::to_string(c)?;
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(conditions.eq(conditions_json))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(a) = action_val {
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(action.eq(a))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(ap) = action_params_val {
-            let action_params_json = serde_json::to_string(ap)?;
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(action_params.eq(Some(action_params_json)))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(p) = priority_val {
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(priority.eq(p))
-                .execute(conn)
-                .await?;
-        }
-        if let Some(active) = is_active_val {
-            diesel::update(agent_rules.filter(id.eq(rule_id)))
-                .set(is_active.eq(active))
-                .execute(conn)
-                .await?;
-        }
+        // Serialize JSON fields if provided
+        let conditions_json = conditions_val.map(serde_json::to_string).transpose()?;
+        let action_params_json = action_params_val
+            .map(|ap| serde_json::to_string(ap).map(Some))
+            .transpose()?;
 
-        // Always update updated_at
-        diesel::update(agent_rules.filter(id.eq(rule_id)))
-            .set(updated_at.eq(Utc::now()))
-            .execute(conn)
+        // Build changeset with all provided fields in a single update
+        let changes = AgentRuleChanges {
+            name: name_val.map(|s| s.to_string()),
+            description: description_val.map(|s| Some(s.to_string())),
+            source_type: source_type_val.map(|s| s.to_string()),
+            rule_type: rule_type_val.map(|s| s.to_string()),
+            conditions: conditions_json,
+            action: action_val.map(|s| s.to_string()),
+            action_params: action_params_json,
+            priority: priority_val,
+            is_active: is_active_val,
+            updated_at: Some(Utc::now()),
+        };
+
+        let updated = diesel::update(agent_rules.filter(id.eq(rule_id)))
+            .set(&changes)
+            .get_result::<AgentRule>(conn)
             .await?;
 
-        get_by_id(conn, rule_id).await
+        Ok(updated)
     }
 
     pub async fn delete(conn: &mut AsyncPgConnection, rule_id: Uuid) -> anyhow::Result<()> {

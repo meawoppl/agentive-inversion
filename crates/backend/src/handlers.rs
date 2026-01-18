@@ -6,11 +6,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use shared_types::{
     Category, ConnectEmailAccountRequest, CreateCategoryRequest, CreateTodoRequest,
-    EmailAccountResponse, Todo, UpdateCategoryRequest, UpdateTodoRequest,
+    EmailAccountResponse, EmailListQuery, EmailResponse, Todo, UpdateCategoryRequest,
+    UpdateTodoRequest,
 };
 use uuid::Uuid;
 
-use crate::db::{categories, email_accounts, todos, DbPool};
+use crate::db::{categories, email_accounts, emails, todos, DbPool};
 
 // Todo handlers
 pub async fn list_todos(State(pool): State<DbPool>) -> Result<Json<Vec<Todo>>, StatusCode> {
@@ -378,4 +379,113 @@ pub async fn delete_category(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// Email handlers
+pub async fn list_emails(
+    State(pool): State<DbPool>,
+    Query(query): Query<EmailListQuery>,
+) -> Result<Json<Vec<EmailResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let limit = query.limit.or(Some(50));
+    let offset = query.offset;
+
+    let items = if let Some(acc_id) = query.account_id {
+        emails::list_by_account(&mut conn, acc_id, limit)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to list emails: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+    } else {
+        emails::list_all(&mut conn, limit, offset)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to list emails: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+    };
+
+    let responses: Vec<EmailResponse> = items
+        .into_iter()
+        .map(|e| EmailResponse {
+            id: e.id,
+            account_id: e.account_id,
+            gmail_id: e.gmail_id,
+            thread_id: e.thread_id,
+            subject: e.subject,
+            from_address: e.from_address,
+            from_name: e.from_name,
+            to_addresses: e.to_addresses.into_iter().flatten().collect(),
+            snippet: e.snippet,
+            has_attachments: e.has_attachments,
+            received_at: e.received_at,
+            processed: e.processed,
+            archived_in_gmail: e.archived_in_gmail,
+        })
+        .collect();
+
+    Ok(Json(responses))
+}
+
+pub async fn get_email(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<EmailResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let email = emails::get_by_id(&mut conn, id).await.map_err(|e| {
+        tracing::error!("Failed to get email: {:?}", e);
+        StatusCode::NOT_FOUND
+    })?;
+
+    Ok(Json(EmailResponse {
+        id: email.id,
+        account_id: email.account_id,
+        gmail_id: email.gmail_id,
+        thread_id: email.thread_id,
+        subject: email.subject,
+        from_address: email.from_address,
+        from_name: email.from_name,
+        to_addresses: email.to_addresses.into_iter().flatten().collect(),
+        snippet: email.snippet,
+        has_attachments: email.has_attachments,
+        received_at: email.received_at,
+        processed: email.processed,
+        archived_in_gmail: email.archived_in_gmail,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmailStatsResponse {
+    pub total: i64,
+    pub unprocessed: i64,
+}
+
+pub async fn get_email_stats(
+    State(pool): State<DbPool>,
+) -> Result<Json<EmailStatsResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let total = emails::count_all(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to count emails: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let unprocessed = emails::count_unprocessed(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to count unprocessed emails: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(EmailStatsResponse { total, unprocessed }))
 }

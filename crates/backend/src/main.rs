@@ -43,6 +43,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/categories", post(handlers::create_category))
         .route("/api/categories/:id", put(handlers::update_category))
         .route("/api/categories/:id", delete(handlers::delete_category))
+        // Email routes
+        .route("/api/emails", get(handlers::list_emails))
+        .route("/api/emails/stats", get(handlers::get_email_stats))
+        .route("/api/emails/:id", get(handlers::get_email))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

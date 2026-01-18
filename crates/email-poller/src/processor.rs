@@ -233,7 +233,88 @@ enum ProcessedEmailOutcome {
     Ignored,
 }
 
-/// Process a single email
+/// Determine decision status and rule ID based on processing result
+fn determine_decision_status(result: &EmailProcessingResult) -> (&'static str, Option<Uuid>) {
+    if result.auto_execute {
+        if let Some(ref rule_match) = result.matched_rule {
+            ("auto_approved", Some(rule_match.rule_id))
+        } else {
+            ("proposed", None)
+        }
+    } else {
+        ("proposed", None)
+    }
+}
+
+/// Create a decision record from an email processing result
+async fn create_decision_from_result(
+    conn: &mut diesel_async::AsyncPgConnection,
+    email: &Email,
+    result: &EmailProcessingResult,
+    status: &str,
+    applied_rule_id: Option<Uuid>,
+) -> anyhow::Result<Uuid> {
+    let proposed_action_json = serde_json::to_string(&result.proposed_action)?;
+    let reasoning_details_json = serde_json::to_string(&result.reasoning_details)?;
+
+    let decision_id = db::create_decision(
+        conn,
+        "email",
+        Some(email.id),
+        Some(&email.gmail_id),
+        &result.decision_type,
+        &proposed_action_json,
+        &result.reasoning,
+        Some(&reasoning_details_json),
+        result.confidence,
+        status,
+        applied_rule_id,
+    )
+    .await?;
+
+    tracing::info!(
+        "Created decision {} for email {} (status: {}, action: {})",
+        decision_id,
+        email.gmail_id,
+        status,
+        result.decision_type
+    );
+
+    Ok(decision_id)
+}
+
+/// Execute an auto-approved create_todo decision by creating the todo
+async fn execute_auto_approved_todo(
+    conn: &mut diesel_async::AsyncPgConnection,
+    email: &Email,
+    decision_id: Uuid,
+    proposed_action: &ProposedTodoAction,
+) -> anyhow::Result<()> {
+    let todo_id = db::create_todo_from_decision(
+        conn,
+        decision_id,
+        &proposed_action.todo_title,
+        proposed_action.todo_description.as_deref(),
+        "email",
+        Some(&email.gmail_id),
+        proposed_action.due_date,
+        proposed_action.category_id,
+    )
+    .await?;
+
+    db::update_decision_result_todo(conn, decision_id, todo_id).await?;
+
+    tracing::info!(
+        "Auto-created todo {} from decision {} for email {}",
+        todo_id,
+        decision_id,
+        email.gmail_id
+    );
+
+    Ok(())
+}
+
+/// Process a single email: evaluate rules, create decision, execute if auto-approved
 async fn process_single_email(
     conn: &mut diesel_async::AsyncPgConnection,
     email: &Email,
@@ -243,76 +324,31 @@ async fn process_single_email(
 
     let outcome = match result {
         Some(processing_result) => {
-            // Serialize proposed action and reasoning details
-            let proposed_action_json = serde_json::to_string(&processing_result.proposed_action)?;
-            let reasoning_details_json =
-                serde_json::to_string(&processing_result.reasoning_details)?;
+            let (status, applied_rule_id) = determine_decision_status(&processing_result);
 
-            // Determine status based on whether to auto-execute
-            let (status, applied_rule_id) = if processing_result.auto_execute {
-                if let Some(ref rule_match) = processing_result.matched_rule {
-                    ("auto_approved", Some(rule_match.rule_id))
-                } else {
-                    ("proposed", None)
-                }
-            } else {
-                ("proposed", None)
-            };
-
-            // Create the decision
-            let decision_id = db::create_decision(
+            let decision_id = create_decision_from_result(
                 conn,
-                "email",
-                Some(email.id),
-                Some(&email.gmail_id),
-                &processing_result.decision_type,
-                &proposed_action_json,
-                &processing_result.reasoning,
-                Some(&reasoning_details_json),
-                processing_result.confidence,
+                email,
+                &processing_result,
                 status,
                 applied_rule_id,
             )
             .await?;
 
-            tracing::info!(
-                "Created decision {} for email {} (status: {}, action: {})",
-                decision_id,
-                email.gmail_id,
-                status,
-                processing_result.decision_type
-            );
-
-            // If rule matched, increment match count
+            // Update rule match count if a rule matched
             if let Some(ref rule_match) = processing_result.matched_rule {
                 db::increment_rule_match_count(conn, rule_match.rule_id).await?;
             }
 
-            // If auto-approved and action is create_todo, create the todo immediately
+            // Execute auto-approved create_todo decisions
             if status == "auto_approved" && processing_result.decision_type == "create_todo" {
-                let todo_id = db::create_todo_from_decision(
+                execute_auto_approved_todo(
                     conn,
+                    email,
                     decision_id,
-                    &processing_result.proposed_action.todo_title,
-                    processing_result
-                        .proposed_action
-                        .todo_description
-                        .as_deref(),
-                    "email",
-                    Some(&email.gmail_id),
-                    processing_result.proposed_action.due_date,
-                    processing_result.proposed_action.category_id,
+                    &processing_result.proposed_action,
                 )
                 .await?;
-
-                db::update_decision_result_todo(conn, decision_id, todo_id).await?;
-
-                tracing::info!(
-                    "Auto-created todo {} from decision {} for email {}",
-                    todo_id,
-                    decision_id,
-                    email.gmail_id
-                );
             }
 
             if processing_result.matched_rule.is_some() {
@@ -330,7 +366,6 @@ async fn process_single_email(
         }
     };
 
-    // Mark email as processed
     db::mark_email_processed(conn, email.id).await?;
 
     Ok(outcome)

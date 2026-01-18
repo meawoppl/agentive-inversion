@@ -376,3 +376,516 @@ main {
     font-size: 14px;
     color: #2c3e50;
 }
+
+/* Navigation badge for pending count */
+.nav-badge {
+    display: inline-block;
+    background-color: #e74c3c;
+    color: white;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 6px;
+    font-weight: 600;
+}
+
+/* Source badge for agent-created todos */
+.source-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    background-color: #3498db;
+    color: white;
+    border-radius: 12px;
+    margin-right: 8px;
+}
+
+/* Decision Inbox styles */
+.decision-inbox h2 {
+    margin-bottom: 8px;
+    color: #2c3e50;
+}
+
+.inbox-header {
+    margin-bottom: 16px;
+}
+
+.decision-count {
+    color: #7f8c8d;
+    font-size: 14px;
+    margin-bottom: 16px;
+}
+
+.batch-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.btn-secondary {
+    padding: 8px 16px;
+    background-color: #ecf0f1;
+    color: #2c3e50;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.btn-secondary:hover {
+    background-color: #d5dbdb;
+}
+
+.btn-approve {
+    padding: 8px 16px;
+    background-color: #27ae60;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.btn-approve:hover {
+    background-color: #219a52;
+}
+
+.btn-reject {
+    padding: 8px 16px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.btn-reject:hover {
+    background-color: #c0392b;
+}
+
+.decision-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.decision-item {
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+    background-color: #f9f9f9;
+    border-left: 4px solid #3498db;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.decision-item:hover {
+    background-color: #f0f0f0;
+}
+
+.decision-item.selected {
+    background-color: #e8f4fd;
+    border-left-color: #2980b9;
+}
+
+.decision-item.high {
+    border-left-color: #27ae60;
+}
+
+.decision-item.medium {
+    border-left-color: #f39c12;
+}
+
+.decision-item.low {
+    border-left-color: #e74c3c;
+}
+
+.decision-select {
+    display: flex;
+    align-items: flex-start;
+    padding-top: 4px;
+}
+
+.decision-select input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.decision-content {
+    flex: 1;
+    cursor: pointer;
+}
+
+.decision-header {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.decision-source {
+    font-size: 12px;
+    padding: 2px 8px;
+    background-color: #ecf0f1;
+    color: #7f8c8d;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.confidence-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+}
+
+.confidence-badge.high {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.confidence-badge.medium {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.confidence-badge.low {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.decision-time {
+    font-size: 12px;
+    color: #95a5a6;
+}
+
+.decision-email-info {
+    margin-bottom: 8px;
+}
+
+.decision-email-info .email-from {
+    font-weight: 600;
+    color: #2c3e50;
+    margin-right: 8px;
+}
+
+.decision-email-info .email-subject {
+    color: #7f8c8d;
+}
+
+.decision-proposed {
+    margin-bottom: 8px;
+}
+
+.proposed-label {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.proposed-action {
+    color: #3498db;
+    font-weight: 500;
+}
+
+.proposed-title {
+    color: #7f8c8d;
+}
+
+.decision-reasoning {
+    font-size: 13px;
+    color: #7f8c8d;
+}
+
+.decision-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    justify-content: center;
+}
+
+/* Modal styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background-color: white;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid #ecf0f1;
+}
+
+.modal-header h3 {
+    margin: 0;
+    color: #2c3e50;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    color: #7f8c8d;
+    cursor: pointer;
+    padding: 4px 8px;
+}
+
+.modal-close:hover {
+    color: #2c3e50;
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-footer {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    padding: 16px 20px;
+    border-top: 1px solid #ecf0f1;
+}
+
+/* Decision detail view */
+.decision-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.detail-section {
+    padding-bottom: 16px;
+    border-bottom: 1px solid #ecf0f1;
+}
+
+.detail-section:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.detail-section h4 {
+    color: #2c3e50;
+    margin-bottom: 8px;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.detail-section p {
+    color: #7f8c8d;
+    margin-bottom: 4px;
+    font-size: 14px;
+}
+
+.detail-section strong {
+    color: #2c3e50;
+}
+
+.reasoning-text {
+    line-height: 1.5;
+}
+
+.reasoning-details {
+    background-color: #f9f9f9;
+    padding: 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    overflow-x: auto;
+    color: #7f8c8d;
+}
+
+.confidence.high {
+    color: #27ae60;
+}
+
+.confidence.medium {
+    color: #f39c12;
+}
+
+.confidence.low {
+    color: #e74c3c;
+}
+
+/* Decision Log styles */
+.decision-log h2 {
+    margin-bottom: 16px;
+    color: #2c3e50;
+}
+
+.stats-overview {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.stat-card {
+    background-color: #f9f9f9;
+    padding: 16px;
+    border-radius: 8px;
+    text-align: center;
+    border-left: 4px solid #bdc3c7;
+}
+
+.stat-card.pending {
+    border-left-color: #f39c12;
+}
+
+.stat-card.approved {
+    border-left-color: #27ae60;
+}
+
+.stat-card.rejected {
+    border-left-color: #e74c3c;
+}
+
+.stat-card.auto {
+    border-left-color: #3498db;
+}
+
+.stat-card.confidence {
+    border-left-color: #9b59b6;
+}
+
+.stat-value {
+    display: block;
+    font-size: 24px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.stat-label {
+    display: block;
+    font-size: 12px;
+    color: #7f8c8d;
+    margin-top: 4px;
+}
+
+.log-filter {
+    margin-bottom: 16px;
+}
+
+.log-filter label {
+    margin-right: 8px;
+    color: #7f8c8d;
+}
+
+.log-filter select {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.log-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.log-item {
+    padding: 12px 16px;
+    background-color: #f9f9f9;
+    border-left: 4px solid #bdc3c7;
+    border-radius: 4px;
+}
+
+.log-item.status-pending {
+    border-left-color: #f39c12;
+}
+
+.log-item.status-approved {
+    border-left-color: #27ae60;
+}
+
+.log-item.status-rejected {
+    border-left-color: #e74c3c;
+}
+
+.log-item.status-auto {
+    border-left-color: #3498db;
+}
+
+.log-header {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.status-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    text-transform: uppercase;
+}
+
+.status-badge.status-pending {
+    background-color: #fef3cd;
+    color: #856404;
+}
+
+.status-badge.status-approved {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.status-badge.status-rejected {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.status-badge.status-auto {
+    background-color: #d1ecf1;
+    color: #0c5460;
+}
+
+.log-type {
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.log-source {
+    font-size: 12px;
+    color: #95a5a6;
+}
+
+.log-time {
+    font-size: 12px;
+    color: #95a5a6;
+    margin-left: auto;
+}
+
+.log-reasoning {
+    font-size: 13px;
+    color: #7f8c8d;
+}
+
+.log-feedback {
+    font-size: 12px;
+    color: #e74c3c;
+    margin-top: 8px;
+    font-style: italic;
+}

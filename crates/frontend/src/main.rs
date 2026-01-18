@@ -1,5 +1,9 @@
 use gloo_net::http::Request;
-use shared_types::{Category, CreateTodoRequest, EmailResponse, Todo, UpdateTodoRequest};
+use shared_types::{
+    AgentDecisionResponse, ApproveDecisionRequest, BatchApproveDecisionsRequest,
+    BatchRejectDecisionsRequest, Category, CreateTodoRequest, DecisionStats, EmailResponse,
+    ProposedTodoAction, RejectDecisionRequest, Todo, UpdateTodoRequest,
+};
 use uuid::Uuid;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
@@ -8,12 +12,31 @@ use yew::prelude::*;
 enum View {
     Inbox,
     Todos,
+    DecisionLog,
     Categories,
 }
 
 #[function_component(App)]
 fn app() -> Html {
     let current_view = use_state(|| View::Inbox);
+    let pending_count = use_state(|| 0i64);
+
+    // Fetch decision stats for pending count
+    {
+        let pending_count = pending_count.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(response) = Request::get("/api/decisions/stats").send().await {
+                    if response.ok() {
+                        if let Ok(stats) = response.json::<DecisionStats>().await {
+                            pending_count.set(stats.pending);
+                        }
+                    }
+                }
+            });
+            || ()
+        });
+    }
 
     let set_view_inbox = {
         let current_view = current_view.clone();
@@ -23,6 +46,11 @@ fn app() -> Html {
     let set_view_todos = {
         let current_view = current_view.clone();
         Callback::from(move |_| current_view.set(View::Todos))
+    };
+
+    let set_view_log = {
+        let current_view = current_view.clone();
+        Callback::from(move |_| current_view.set(View::DecisionLog))
     };
 
     let set_view_categories = {
@@ -40,12 +68,23 @@ fn app() -> Html {
                         onclick={set_view_inbox}
                     >
                         {"Inbox"}
+                        {if *pending_count > 0 {
+                            html! { <span class="nav-badge">{*pending_count}</span> }
+                        } else {
+                            html! {}
+                        }}
                     </button>
                     <button
                         class={if *current_view == View::Todos { "nav-btn active" } else { "nav-btn" }}
                         onclick={set_view_todos}
                     >
                         {"Todos"}
+                    </button>
+                    <button
+                        class={if *current_view == View::DecisionLog { "nav-btn active" } else { "nav-btn" }}
+                        onclick={set_view_log}
+                    >
+                        {"Decision Log"}
                     </button>
                     <button
                         class={if *current_view == View::Categories { "nav-btn active" } else { "nav-btn" }}
@@ -57,8 +96,9 @@ fn app() -> Html {
             </header>
             <main>
                 {match &*current_view {
-                    View::Inbox => html! { <EmailInbox /> },
+                    View::Inbox => html! { <DecisionInbox /> },
                     View::Todos => html! { <TodoList /> },
+                    View::DecisionLog => html! { <DecisionLog /> },
                     View::Categories => html! { <CategoryManager /> },
                 }}
             </main>
@@ -66,29 +106,65 @@ fn app() -> Html {
     }
 }
 
-#[function_component(EmailInbox)]
-fn email_inbox() -> Html {
-    let emails = use_state(Vec::<EmailResponse>::new);
+// ============================================================================
+// Decision Inbox Component - Shows pending decisions for review
+// ============================================================================
+
+#[function_component(DecisionInbox)]
+fn decision_inbox() -> Html {
+    let decisions = use_state(Vec::<AgentDecisionResponse>::new);
+    let emails = use_state(std::collections::HashMap::<Uuid, EmailResponse>::new);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
+    let refresh_trigger = use_state(|| 0u32);
+    let selected_decisions = use_state(std::collections::HashSet::<Uuid>::new);
+    let selected_decision = use_state(|| None::<AgentDecisionResponse>);
 
+    // Fetch pending decisions
     {
+        let decisions = decisions.clone();
         let emails = emails.clone();
         let loading = loading.clone();
         let error = error.clone();
+        let refresh_trigger = *refresh_trigger;
 
-        use_effect_with((), move |_| {
+        use_effect_with(refresh_trigger, move |_| {
             wasm_bindgen_futures::spawn_local(async move {
-                match Request::get("/api/emails?limit=50").send().await {
+                // Fetch pending decisions
+                match Request::get("/api/decisions/pending").send().await {
                     Ok(response) => {
                         if response.ok() {
-                            match response.json::<Vec<EmailResponse>>().await {
+                            match response.json::<Vec<AgentDecisionResponse>>().await {
                                 Ok(data) => {
-                                    emails.set(data);
+                                    // Fetch email details for each decision
+                                    let mut email_map = std::collections::HashMap::new();
+                                    for decision in &data {
+                                        if decision.source_type == "email" {
+                                            if let Some(source_id) = decision.source_id {
+                                                if let Ok(email_resp) = Request::get(&format!(
+                                                    "/api/emails/{}",
+                                                    source_id
+                                                ))
+                                                .send()
+                                                .await
+                                                {
+                                                    if email_resp.ok() {
+                                                        if let Ok(email) =
+                                                            email_resp.json::<EmailResponse>().await
+                                                        {
+                                                            email_map.insert(source_id, email);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    emails.set(email_map);
+                                    decisions.set(data);
                                     loading.set(false);
                                 }
                                 Err(e) => {
-                                    error.set(Some(format!("Failed to parse emails: {}", e)));
+                                    error.set(Some(format!("Failed to parse decisions: {}", e)));
                                     loading.set(false);
                                 }
                             }
@@ -107,63 +183,599 @@ fn email_inbox() -> Html {
         });
     }
 
+    let on_approve = {
+        let refresh_trigger = refresh_trigger.clone();
+        let selected_decision = selected_decision.clone();
+        Callback::from(move |id: Uuid| {
+            let refresh_trigger = refresh_trigger.clone();
+            let selected_decision = selected_decision.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = ApproveDecisionRequest {
+                    modifications: None,
+                    create_rule: None,
+                    rule_name: None,
+                };
+                if let Ok(response) = Request::post(&format!("/api/decisions/{}/approve", id))
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .unwrap()
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        selected_decision.set(None);
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    let on_reject = {
+        let refresh_trigger = refresh_trigger.clone();
+        let selected_decision = selected_decision.clone();
+        Callback::from(move |(id, feedback): (Uuid, Option<String>)| {
+            let refresh_trigger = refresh_trigger.clone();
+            let selected_decision = selected_decision.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = RejectDecisionRequest {
+                    feedback,
+                    create_rule: None,
+                    rule_action: None,
+                };
+                if let Ok(response) = Request::post(&format!("/api/decisions/{}/reject", id))
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .unwrap()
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        selected_decision.set(None);
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    let on_batch_approve = {
+        let selected_decisions = selected_decisions.clone();
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |_| {
+            let ids: Vec<Uuid> = selected_decisions.iter().copied().collect();
+            if ids.is_empty() {
+                return;
+            }
+            let selected_decisions = selected_decisions.clone();
+            let refresh_trigger = refresh_trigger.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = BatchApproveDecisionsRequest { decision_ids: ids };
+                if let Ok(response) = Request::post("/api/decisions/batch/approve")
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .unwrap()
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        selected_decisions.set(std::collections::HashSet::new());
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    let on_batch_reject = {
+        let selected_decisions = selected_decisions.clone();
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |_| {
+            let ids: Vec<Uuid> = selected_decisions.iter().copied().collect();
+            if ids.is_empty() {
+                return;
+            }
+            let selected_decisions = selected_decisions.clone();
+            let refresh_trigger = refresh_trigger.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = BatchRejectDecisionsRequest {
+                    decision_ids: ids,
+                    feedback: None,
+                };
+                if let Ok(response) = Request::post("/api/decisions/batch/reject")
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .unwrap()
+                    .send()
+                    .await
+                {
+                    if response.ok() {
+                        selected_decisions.set(std::collections::HashSet::new());
+                        refresh_trigger.set(*refresh_trigger + 1);
+                    }
+                }
+            });
+        })
+    };
+
+    let toggle_selection = {
+        let selected_decisions = selected_decisions.clone();
+        Callback::from(move |id: Uuid| {
+            let mut new_set = (*selected_decisions).clone();
+            if new_set.contains(&id) {
+                new_set.remove(&id);
+            } else {
+                new_set.insert(id);
+            }
+            selected_decisions.set(new_set);
+        })
+    };
+
+    let select_all = {
+        let selected_decisions = selected_decisions.clone();
+        let decisions = decisions.clone();
+        Callback::from(move |_| {
+            let all_ids: std::collections::HashSet<Uuid> = decisions.iter().map(|d| d.id).collect();
+            selected_decisions.set(all_ids);
+        })
+    };
+
+    let clear_selection = {
+        let selected_decisions = selected_decisions.clone();
+        Callback::from(move |_| {
+            selected_decisions.set(std::collections::HashSet::new());
+        })
+    };
+
     if *loading {
         return html! {
-            <div class="email-inbox">
-                <h2>{"Inbox"}</h2>
-                <p class="loading">{"Loading emails..."}</p>
+            <div class="decision-inbox">
+                <h2>{"Inbox - Pending Decisions"}</h2>
+                <p class="loading">{"Loading decisions..."}</p>
             </div>
         };
     }
 
     if let Some(err) = &*error {
         return html! {
-            <div class="email-inbox">
-                <h2>{"Inbox"}</h2>
+            <div class="decision-inbox">
+                <h2>{"Inbox - Pending Decisions"}</h2>
                 <p class="error">{err}</p>
             </div>
         };
     }
 
-    let emails_list = (*emails).clone();
+    let decisions_list = (*decisions).clone();
+    let emails_map = (*emails).clone();
+    let has_selected = !selected_decisions.is_empty();
 
     html! {
-        <div class="email-inbox">
-            <h2>{"Inbox"}</h2>
-            <p class="email-count">{format!("{} emails", emails_list.len())}</p>
-            <div class="email-list">
-                {if emails_list.is_empty() {
-                    html! { <p class="empty-state">{"No emails found. Connect an email account to get started."}</p> }
+        <div class="decision-inbox">
+            <div class="inbox-header">
+                <h2>{"Inbox - Pending Decisions"}</h2>
+                <p class="decision-count">{format!("{} decisions awaiting review", decisions_list.len())}</p>
+            </div>
+
+            {if !decisions_list.is_empty() {
+                html! {
+                    <div class="batch-actions">
+                        <button class="btn-secondary" onclick={select_all}>{"Select All"}</button>
+                        <button class="btn-secondary" onclick={clear_selection}>{"Clear Selection"}</button>
+                        {if has_selected {
+                            html! {
+                                <>
+                                    <button class="btn-approve" onclick={on_batch_approve.clone()}>
+                                        {format!("Approve Selected ({})", selected_decisions.len())}
+                                    </button>
+                                    <button class="btn-reject" onclick={on_batch_reject.clone()}>
+                                        {format!("Reject Selected ({})", selected_decisions.len())}
+                                    </button>
+                                </>
+                            }
+                        } else {
+                            html! {}
+                        }}
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
+
+            <div class="decision-list">
+                {if decisions_list.is_empty() {
+                    html! { <p class="empty-state">{"No pending decisions. All caught up!"}</p> }
                 } else {
-                    emails_list.iter().map(|email| {
-                        let from_display = email.from_name.clone()
-                            .unwrap_or_else(|| email.from_address.clone());
-                        let received = email.received_at.format("%b %d, %H:%M").to_string();
+                    decisions_list.iter().map(|decision| {
+                        let decision_id = decision.id;
+                        let is_selected = selected_decisions.contains(&decision_id);
+                        let toggle = toggle_selection.clone();
+                        let approve = on_approve.clone();
+                        let reject = on_reject.clone();
+                        let select_detail = selected_decision.clone();
+                        let decision_clone = decision.clone();
+
+                        // Get email info if available
+                        let email = decision.source_id.and_then(|sid| emails_map.get(&sid));
+
+                        // Parse proposed action
+                        let proposed: Option<ProposedTodoAction> = serde_json::from_value(decision.proposed_action.clone()).ok();
 
                         html! {
-                            <div key={email.id.to_string()} class={format!("email-item {}", if email.processed { "processed" } else { "" })}>
-                                <div class="email-header">
-                                    <span class="email-from">{from_display}</span>
-                                    <span class="email-date">{received}</span>
+                            <div key={decision.id.to_string()}
+                                class={format!("decision-item {} {}",
+                                    if is_selected { "selected" } else { "" },
+                                    decision.confidence_level.as_str())}>
+                                <div class="decision-select">
+                                    <input
+                                        type="checkbox"
+                                        checked={is_selected}
+                                        onchange={Callback::from(move |_| toggle.emit(decision_id))}
+                                    />
                                 </div>
-                                <div class="email-subject">{&email.subject}</div>
-                                {if let Some(snippet) = &email.snippet {
-                                    html! { <div class="email-snippet">{snippet}</div> }
-                                } else {
-                                    html! {}
-                                }}
-                                <div class="email-badges">
-                                    {if email.has_attachments {
-                                        html! { <span class="badge attachment">{"Attachment"}</span> }
+                                <div class="decision-content" onclick={Callback::from(move |_| select_detail.set(Some(decision_clone.clone())))}>
+                                    <div class="decision-header">
+                                        <span class="decision-source">
+                                            {if decision.source_type == "email" { "Email" } else { &decision.source_type }}
+                                        </span>
+                                        <span class={format!("confidence-badge {}", decision.confidence_level)}>
+                                            {format!("{}% confident", (decision.confidence * 100.0) as i32)}
+                                        </span>
+                                        <span class="decision-time">
+                                            {decision.created_at.format("%b %d, %H:%M").to_string()}
+                                        </span>
+                                    </div>
+
+                                    {if let Some(email) = email {
+                                        html! {
+                                            <div class="decision-email-info">
+                                                <span class="email-from">{email.from_name.clone().unwrap_or_else(|| email.from_address.clone())}</span>
+                                                <span class="email-subject">{&email.subject}</span>
+                                            </div>
+                                        }
                                     } else {
                                         html! {}
                                     }}
-                                    {if email.processed {
-                                        html! { <span class="badge processed">{"Processed"}</span> }
-                                    } else {
-                                        html! { <span class="badge pending">{"Pending"}</span> }
-                                    }}
+
+                                    <div class="decision-proposed">
+                                        <span class="proposed-label">{"Proposed: "}</span>
+                                        <span class="proposed-action">{&decision.decision_type}</span>
+                                        {if let Some(action) = &proposed {
+                                            html! {
+                                                <span class="proposed-title">{format!(" - \"{}\"", action.todo_title)}</span>
+                                            }
+                                        } else {
+                                            html! {}
+                                        }}
+                                    </div>
+
+                                    <div class="decision-reasoning">
+                                        {&decision.reasoning}
+                                    </div>
                                 </div>
+                                <div class="decision-actions">
+                                    <button class="btn-approve" onclick={Callback::from(move |e: MouseEvent| {
+                                        e.stop_propagation();
+                                        approve.emit(decision_id);
+                                    })}>{"Approve"}</button>
+                                    <button class="btn-reject" onclick={Callback::from(move |e: MouseEvent| {
+                                        e.stop_propagation();
+                                        reject.emit((decision_id, None));
+                                    })}>{"Reject"}</button>
+                                </div>
+                            </div>
+                        }
+                    }).collect::<Html>()
+                }}
+            </div>
+
+            // Decision detail modal
+            {if let Some(decision) = &*selected_decision {
+                let close_modal = {
+                    let selected_decision = selected_decision.clone();
+                    Callback::from(move |_| selected_decision.set(None))
+                };
+                let decision_for_approve = decision.clone();
+                let decision_for_reject = decision.clone();
+                let approve = on_approve.clone();
+                let reject = on_reject.clone();
+
+                html! {
+                    <div class="modal-overlay" onclick={close_modal.clone()}>
+                        <div class="modal-content" onclick={Callback::from(|e: MouseEvent| e.stop_propagation())}>
+                            <div class="modal-header">
+                                <h3>{"Decision Details"}</h3>
+                                <button class="modal-close" onclick={close_modal}>{"x"}</button>
+                            </div>
+                            <div class="modal-body">
+                                <DecisionDetailView decision={decision.clone()} />
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn-approve" onclick={Callback::from(move |_| approve.emit(decision_for_approve.id))}>
+                                    {"Approve Decision"}
+                                </button>
+                                <button class="btn-reject" onclick={Callback::from(move |_| reject.emit((decision_for_reject.id, None)))}>
+                                    {"Reject Decision"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Decision Detail View Component
+// ============================================================================
+
+#[derive(Properties, PartialEq, Clone)]
+struct DecisionDetailProps {
+    decision: AgentDecisionResponse,
+}
+
+#[function_component(DecisionDetailView)]
+fn decision_detail_view(props: &DecisionDetailProps) -> Html {
+    let decision = &props.decision;
+    let proposed: Option<ProposedTodoAction> =
+        serde_json::from_value(decision.proposed_action.clone()).ok();
+
+    html! {
+        <div class="decision-detail">
+            <div class="detail-section">
+                <h4>{"Source"}</h4>
+                <p>{format!("Type: {}", decision.source_type)}</p>
+                {if let Some(ext_id) = &decision.source_external_id {
+                    html! { <p>{format!("External ID: {}", ext_id)}</p> }
+                } else {
+                    html! {}
+                }}
+            </div>
+
+            <div class="detail-section">
+                <h4>{"Decision"}</h4>
+                <p>{format!("Type: {}", decision.decision_type)}</p>
+                <p>{format!("Status: {}", decision.status)}</p>
+                <p class={format!("confidence {}", decision.confidence_level)}>
+                    {format!("Confidence: {}% ({})", (decision.confidence * 100.0) as i32, decision.confidence_level)}
+                </p>
+            </div>
+
+            {if let Some(action) = proposed {
+                html! {
+                    <div class="detail-section">
+                        <h4>{"Proposed Todo"}</h4>
+                        <p><strong>{"Title: "}</strong>{&action.todo_title}</p>
+                        {if let Some(desc) = &action.todo_description {
+                            html! { <p><strong>{"Description: "}</strong>{desc}</p> }
+                        } else {
+                            html! {}
+                        }}
+                        {if let Some(due) = &action.due_date {
+                            html! { <p><strong>{"Due Date: "}</strong>{due.format("%Y-%m-%d %H:%M").to_string()}</p> }
+                        } else {
+                            html! {}
+                        }}
+                        {if let Some(priority) = &action.priority {
+                            html! { <p><strong>{"Priority: "}</strong>{priority}</p> }
+                        } else {
+                            html! {}
+                        }}
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
+
+            <div class="detail-section">
+                <h4>{"Reasoning"}</h4>
+                <p class="reasoning-text">{&decision.reasoning}</p>
+            </div>
+
+            {if let Some(details) = &decision.reasoning_details {
+                html! {
+                    <div class="detail-section">
+                        <h4>{"Analysis Details"}</h4>
+                        <pre class="reasoning-details">{serde_json::to_string_pretty(details).unwrap_or_default()}</pre>
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
+
+            <div class="detail-section">
+                <h4>{"Timeline"}</h4>
+                <p>{format!("Created: {}", decision.created_at.format("%Y-%m-%d %H:%M:%S"))}</p>
+                {if let Some(reviewed) = decision.reviewed_at {
+                    html! { <p>{format!("Reviewed: {}", reviewed.format("%Y-%m-%d %H:%M:%S"))}</p> }
+                } else {
+                    html! {}
+                }}
+                {if let Some(executed) = decision.executed_at {
+                    html! { <p>{format!("Executed: {}", executed.format("%Y-%m-%d %H:%M:%S"))}</p> }
+                } else {
+                    html! {}
+                }}
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Decision Log Component - Shows all historical decisions
+// ============================================================================
+
+#[function_component(DecisionLog)]
+fn decision_log() -> Html {
+    let decisions = use_state(Vec::<AgentDecisionResponse>::new);
+    let stats = use_state(|| None::<DecisionStats>);
+    let loading = use_state(|| true);
+    let error = use_state(|| None::<String>);
+    let filter = use_state(|| "all".to_string());
+
+    {
+        let decisions = decisions.clone();
+        let stats = stats.clone();
+        let loading = loading.clone();
+        let error = error.clone();
+        let filter = (*filter).clone();
+
+        use_effect_with(filter.clone(), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                // Fetch stats
+                if let Ok(response) = Request::get("/api/decisions/stats").send().await {
+                    if response.ok() {
+                        if let Ok(s) = response.json::<DecisionStats>().await {
+                            stats.set(Some(s));
+                        }
+                    }
+                }
+
+                // Fetch decisions
+                let url = if filter == "all" {
+                    "/api/decisions".to_string()
+                } else {
+                    format!("/api/decisions?status={}", filter)
+                };
+
+                match Request::get(&url).send().await {
+                    Ok(response) => {
+                        if response.ok() {
+                            match response.json::<Vec<AgentDecisionResponse>>().await {
+                                Ok(data) => {
+                                    decisions.set(data);
+                                    loading.set(false);
+                                }
+                                Err(e) => {
+                                    error.set(Some(format!("Failed to parse decisions: {}", e)));
+                                    loading.set(false);
+                                }
+                            }
+                        } else {
+                            error.set(Some(format!("API error: {}", response.status())));
+                            loading.set(false);
+                        }
+                    }
+                    Err(e) => {
+                        error.set(Some(format!("Network error: {}", e)));
+                        loading.set(false);
+                    }
+                }
+            });
+            || ()
+        });
+    }
+
+    let on_filter_change = {
+        let filter = filter.clone();
+        Callback::from(move |e: Event| {
+            let target: HtmlInputElement = e.target_unchecked_into();
+            filter.set(target.value());
+        })
+    };
+
+    if *loading {
+        return html! {
+            <div class="decision-log">
+                <h2>{"Decision Log"}</h2>
+                <p class="loading">{"Loading decisions..."}</p>
+            </div>
+        };
+    }
+
+    if let Some(err) = &*error {
+        return html! {
+            <div class="decision-log">
+                <h2>{"Decision Log"}</h2>
+                <p class="error">{err}</p>
+            </div>
+        };
+    }
+
+    let decisions_list = (*decisions).clone();
+
+    html! {
+        <div class="decision-log">
+            <h2>{"Decision Log"}</h2>
+
+            // Stats overview
+            {if let Some(s) = &*stats {
+                html! {
+                    <div class="stats-overview">
+                        <div class="stat-card">
+                            <span class="stat-value">{s.total}</span>
+                            <span class="stat-label">{"Total"}</span>
+                        </div>
+                        <div class="stat-card pending">
+                            <span class="stat-value">{s.pending}</span>
+                            <span class="stat-label">{"Pending"}</span>
+                        </div>
+                        <div class="stat-card approved">
+                            <span class="stat-value">{s.approved}</span>
+                            <span class="stat-label">{"Approved"}</span>
+                        </div>
+                        <div class="stat-card rejected">
+                            <span class="stat-value">{s.rejected}</span>
+                            <span class="stat-label">{"Rejected"}</span>
+                        </div>
+                        <div class="stat-card auto">
+                            <span class="stat-value">{s.auto_approved}</span>
+                            <span class="stat-label">{"Auto-approved"}</span>
+                        </div>
+                        <div class="stat-card confidence">
+                            <span class="stat-value">{format!("{:.0}%", s.average_confidence * 100.0)}</span>
+                            <span class="stat-label">{"Avg Confidence"}</span>
+                        </div>
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
+
+            // Filter
+            <div class="log-filter">
+                <label>{"Filter by status: "}</label>
+                <select onchange={on_filter_change} value={(*filter).clone()}>
+                    <option value="all">{"All"}</option>
+                    <option value="proposed">{"Pending"}</option>
+                    <option value="approved">{"Approved"}</option>
+                    <option value="rejected">{"Rejected"}</option>
+                    <option value="auto_approved">{"Auto-approved"}</option>
+                    <option value="executed">{"Executed"}</option>
+                </select>
+            </div>
+
+            <p class="decision-count">{format!("{} decisions", decisions_list.len())}</p>
+
+            <div class="log-list">
+                {if decisions_list.is_empty() {
+                    html! { <p class="empty-state">{"No decisions found."}</p> }
+                } else {
+                    decisions_list.iter().map(|decision| {
+                        let status_class = match decision.status.as_str() {
+                            "proposed" => "status-pending",
+                            "approved" | "executed" => "status-approved",
+                            "rejected" => "status-rejected",
+                            "auto_approved" => "status-auto",
+                            _ => "",
+                        };
+
+                        html! {
+                            <div key={decision.id.to_string()} class={format!("log-item {}", status_class)}>
+                                <div class="log-header">
+                                    <span class={format!("status-badge {}", status_class)}>{&decision.status}</span>
+                                    <span class="log-type">{&decision.decision_type}</span>
+                                    <span class="log-source">{format!("via {}", decision.source_type)}</span>
+                                    <span class="log-time">{decision.created_at.format("%b %d, %H:%M").to_string()}</span>
+                                </div>
+                                <div class="log-reasoning">{&decision.reasoning}</div>
+                                {if let Some(feedback) = &decision.user_feedback {
+                                    html! { <div class="log-feedback">{format!("Feedback: {}", feedback)}</div> }
+                                } else {
+                                    html! {}
+                                }}
                             </div>
                         }
                     }).collect::<Html>()
@@ -172,6 +784,10 @@ fn email_inbox() -> Html {
         </div>
     }
 }
+
+// ============================================================================
+// Todo List Component (existing, kept with minimal changes)
+// ============================================================================
 
 #[function_component(TodoList)]
 fn todo_list() -> Html {
@@ -359,7 +975,7 @@ fn todo_list() -> Html {
             <p class="todo-count">{format!("{} todos", sorted_todos.len())}</p>
             <div class="todo-list">
                 {if sorted_todos.is_empty() {
-                    html! { <p class="empty-state">{"No todos yet! Add one above."}</p> }
+                    html! { <p class="empty-state">{"No todos yet! Add one above or approve some decisions."}</p> }
                 } else {
                     sorted_todos.iter().map(|todo| {
                         let category = todo.category_id
@@ -413,6 +1029,11 @@ fn todo_list() -> Html {
                                     } else {
                                         html! {}
                                     }}
+                                    {if todo.decision_id.is_some() {
+                                        html! { <span class="source-badge">{"From Agent"}</span> }
+                                    } else {
+                                        html! {}
+                                    }}
                                     <button class="delete-btn" onclick={Callback::from(move |_| delete.emit(todo_id))}>{"Delete"}</button>
                                 </div>
                             </div>
@@ -423,6 +1044,10 @@ fn todo_list() -> Html {
         </div>
     }
 }
+
+// ============================================================================
+// Category Manager Component (existing)
+// ============================================================================
 
 #[function_component(CategoryManager)]
 fn category_manager() -> Html {

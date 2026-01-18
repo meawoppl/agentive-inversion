@@ -367,7 +367,7 @@ pub struct AgentDecision {
 
 /// API response for agent decisions (hides internal IDs, adds computed fields)
 /// JSON fields are parsed for the API response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentDecisionResponse {
     pub id: Uuid,
     pub source_type: String,
@@ -455,6 +455,33 @@ pub struct RejectDecisionRequest {
     pub feedback: Option<String>,
     pub create_rule: Option<bool>,
     pub rule_action: Option<String>, // "ignore", "archive"
+}
+
+/// Request to approve multiple decisions at once
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchApproveDecisionsRequest {
+    pub decision_ids: Vec<Uuid>,
+}
+
+/// Request to reject multiple decisions at once
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchRejectDecisionsRequest {
+    pub decision_ids: Vec<Uuid>,
+    pub feedback: Option<String>,
+}
+
+/// Response for batch operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchOperationResponse {
+    pub successful: Vec<Uuid>,
+    pub failed: Vec<BatchOperationFailure>,
+}
+
+/// Details about a failed batch operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchOperationFailure {
+    pub id: Uuid,
+    pub error: String,
 }
 
 /// Statistics about agent decisions

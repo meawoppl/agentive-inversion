@@ -1,6 +1,29 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use uuid::Uuid;
+
+// ============================================================================
+// Regex Cache for Rule Matching
+// ============================================================================
+
+/// Thread-safe cache for compiled regex patterns
+static REGEX_CACHE: std::sync::LazyLock<Mutex<HashMap<String, regex::Regex>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Get a cached regex or compile and cache it
+fn get_cached_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
+    let mut cache = REGEX_CACHE.lock().unwrap();
+
+    if let Some(re) = cache.get(pattern) {
+        return Ok(re.clone());
+    }
+
+    let re = regex::Regex::new(pattern)?;
+    cache.insert(pattern.to_string(), re.clone());
+    Ok(re)
+}
 
 /// Todo struct matching database column order exactly
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -833,7 +856,7 @@ impl RuleEngine {
             "starts_with" => value.starts_with(&pattern),
             "ends_with" => value.ends_with(&pattern),
             "regex" => {
-                match regex::Regex::new(&clause.value) {
+                match get_cached_regex(&clause.value) {
                     Ok(re) => re.is_match(field_value), // Use original value for regex
                     Err(e) => {
                         tracing::warn!("Invalid regex pattern '{}': {}", clause.value, e);
@@ -1150,5 +1173,33 @@ mod tests {
 
         assert_eq!(results1.len(), 1);
         assert_eq!(results2.len(), 0);
+    }
+
+    #[test]
+    fn test_regex_caching() {
+        // Test that the same regex pattern is cached and reused
+        let input = make_test_email();
+        let conditions = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "from_address".to_string(),
+                matcher: "regex".to_string(),
+                value: r".*@example\.com$".to_string(),
+                case_sensitive: false,
+            }],
+        };
+
+        let rule = make_test_rule("Regex Cache Test", conditions.clone(), "create_todo", 10);
+
+        // Run multiple times to exercise cache
+        for _ in 0..10 {
+            let results = RuleEngine::match_email(&[rule.clone()], &input);
+            assert_eq!(results.len(), 1);
+            assert!(results[0].matched);
+        }
+
+        // Verify cache contains the pattern
+        let cache = REGEX_CACHE.lock().unwrap();
+        assert!(cache.contains_key(r".*@example\.com$"));
     }
 }

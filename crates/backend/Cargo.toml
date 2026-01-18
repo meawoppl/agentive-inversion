@@ -34,6 +34,13 @@ webpki-roots = "1.0.4"
 futures = "0.3.31"
 tokio-postgres = "0.7.15"
 clap = { version = "4.5.53", features = ["derive", "env"] }
+# Gmail polling (consolidated from email-poller crate)
+google-gmail1 = "6.0.0"
+yup-oauth2 = "12.1.1"
+base64 = "0.22.1"
+regex = "1"
+hyper = { version = "1.8.1", features = ["client"] }
+hyper-util = { version = "0.1.18", features = ["client-legacy"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

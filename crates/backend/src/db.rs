@@ -7,7 +7,7 @@ use diesel_async::{
 use shared_types::{AgentDecision, AgentRule, Category, EmailAccount, Todo};
 use uuid::Uuid;
 
-use crate::models::AgentDecisionRow;
+use crate::models::{AgentDecisionRow, NewEmail};
 
 pub type DbPool = Pool<AsyncPgConnection>;
 
@@ -198,6 +198,26 @@ pub mod email_accounts {
             .await?;
 
         Ok(updated)
+    }
+
+    /// Update sync error status for an account
+    pub async fn update_sync_error(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+        error: &str,
+    ) -> anyhow::Result<()> {
+        use crate::schema::email_accounts::dsl::*;
+
+        diesel::update(email_accounts.filter(id.eq(account_id)))
+            .set((
+                sync_status.eq("error"),
+                last_sync_error.eq(Some(error)),
+                last_synced.eq(Some(Utc::now())),
+            ))
+            .execute(conn)
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -445,6 +465,39 @@ pub mod emails {
             .get_result(conn)
             .await?;
         Ok(count)
+    }
+
+    /// Insert a new email, returning None if it already exists (by gmail_id)
+    pub async fn insert(
+        conn: &mut AsyncPgConnection,
+        new_email: NewEmail,
+    ) -> anyhow::Result<Option<Email>> {
+        use crate::schema::emails::dsl::*;
+
+        let result = diesel::insert_into(emails)
+            .values(&new_email)
+            .on_conflict(gmail_id)
+            .do_nothing()
+            .get_result::<Email>(conn)
+            .await
+            .optional()?;
+
+        Ok(result)
+    }
+
+    /// Mark an email as processed
+    pub async fn mark_processed(
+        conn: &mut AsyncPgConnection,
+        email_id: Uuid,
+    ) -> anyhow::Result<()> {
+        use crate::schema::emails::dsl::*;
+
+        diesel::update(emails.filter(id.eq(email_id)))
+            .set((processed.eq(true), processed_at.eq(Some(Utc::now()))))
+            .execute(conn)
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -792,6 +845,89 @@ pub mod decisions {
 
         Ok(())
     }
+
+    /// Create a decision with status and optional applied rule (used by processor)
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_with_status(
+        conn: &mut AsyncPgConnection,
+        source_type_val: &str,
+        source_id_val: Option<Uuid>,
+        source_external_id_val: Option<&str>,
+        decision_type_val: &str,
+        proposed_action_val: &str,
+        reasoning_val: &str,
+        reasoning_details_val: Option<&str>,
+        confidence_val: f32,
+        status_val: &str,
+        applied_rule_id_val: Option<Uuid>,
+    ) -> anyhow::Result<Uuid> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = diesel::insert_into(agent_decisions)
+            .values((
+                source_type.eq(source_type_val),
+                source_id.eq(source_id_val),
+                source_external_id.eq(source_external_id_val),
+                decision_type.eq(decision_type_val),
+                proposed_action.eq(proposed_action_val),
+                reasoning.eq(reasoning_val),
+                reasoning_details.eq(reasoning_details_val),
+                confidence.eq(confidence_val),
+                status.eq(status_val),
+                applied_rule_id.eq(applied_rule_id_val),
+            ))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.id)
+    }
+
+    /// Create a todo from an approved decision
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_todo_from_decision(
+        conn: &mut AsyncPgConnection,
+        decision_id_val: Uuid,
+        title_val: &str,
+        description_val: Option<&str>,
+        source_val: &str,
+        source_id_val: Option<&str>,
+        due_date_val: Option<DateTime<Utc>>,
+        category_id_val: Option<Uuid>,
+    ) -> anyhow::Result<Uuid> {
+        use crate::schema::todos::dsl::*;
+
+        let row = diesel::insert_into(todos)
+            .values((
+                title.eq(title_val),
+                description.eq(description_val),
+                completed.eq(false),
+                source.eq(source_val),
+                source_id.eq(source_id_val),
+                due_date.eq(due_date_val),
+                category_id.eq(category_id_val),
+                decision_id.eq(Some(decision_id_val)),
+            ))
+            .get_result::<Todo>(conn)
+            .await?;
+
+        Ok(row.id)
+    }
+
+    /// Update a decision with the resulting todo ID
+    pub async fn update_result_todo(
+        conn: &mut AsyncPgConnection,
+        decision_id_val: Uuid,
+        todo_id_val: Uuid,
+    ) -> anyhow::Result<()> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        diesel::update(agent_decisions.filter(id.eq(decision_id_val)))
+            .set(result_todo_id.eq(Some(todo_id_val)))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
 }
 
 // Agent rules database operations
@@ -837,6 +973,14 @@ pub mod agent_rules {
             .await?;
 
         Ok(items)
+    }
+
+    /// Alias for list_by_source_type - used by processor module
+    pub async fn list_active_for_source(
+        conn: &mut AsyncPgConnection,
+        source: &str,
+    ) -> anyhow::Result<Vec<AgentRule>> {
+        list_by_source_type(conn, source).await
     }
 
     pub async fn get_by_id(

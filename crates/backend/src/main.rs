@@ -12,6 +12,7 @@ use tower_http::{
 mod db;
 mod handlers;
 mod models;
+mod pollers;
 mod schema;
 
 #[tokio::main]
@@ -22,6 +23,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Establish database connection pool
     let pool = db::establish_connection_pool()?;
+
+    // Start email polling background task
+    let poll_pool = pool.clone();
+    tokio::spawn(async move {
+        pollers::start_email_polling_task(poll_pool).await;
+    });
 
     let app = Router::new()
         .route("/health", get(health_check))

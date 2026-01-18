@@ -140,3 +140,22 @@ Required variables (see `.env.example`):
 - Keep commit messages concise
 - Run `cargo fmt` before all commits
 - GitHub Actions must pass before merging
+
+## SHIP Workflow
+
+When the user says **"SHIP"**, execute this workflow:
+
+1. **Create PR**: `gh pr create` with appropriate title and body
+2. **Watch CI**: Use `gh pr checks <PR_NUMBER> --watch` to actively monitor all checks
+3. **Fix minor CI failures**: If `cargo fmt` or `clippy` fails, fix automatically and push
+4. **Re-watch CI**: After any fix, run `gh pr checks <PR_NUMBER> --watch` again
+5. **Merge when passing**: `gh pr merge <PR_NUMBER> --squash --delete-branch`
+6. **Update local**: `git checkout main && git pull`
+
+**Important**: Do NOT use `--auto` flag for merging. Actively watch CI with `gh pr checks --watch` so failures are caught immediately and can be fixed in the same session.
+
+**CI Failure Handling**:
+- **Minor issues** (formatting, clippy warnings): Fix automatically, commit, push, and re-watch CI
+- **Substantive issues** (test failures, build errors): Ask the user before making changes
+
+This is a shorthand for the full PR review cycle when the user is confident in the changes.

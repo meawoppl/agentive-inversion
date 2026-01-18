@@ -15,6 +15,7 @@ mod handlers;
 mod models;
 mod pollers;
 mod schema;
+mod services;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

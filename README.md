@@ -30,7 +30,7 @@ This project uses a Rust workspace with the following crates:
 
 ### Calendar Poller (`crates/calendar-poller`)
 - **Purpose**: Polls Google Calendar for upcoming events
-- **Interval**: Every 5 minutes
+- **Status**: Not yet implemented (stubbed out)
 - **API**: Google Calendar API with OAuth2
 
 ## Data Flow
@@ -209,6 +209,7 @@ agentive-inversion/
 
 ## Future Enhancements
 
+- [ ] Calendar poller implementation (Google Calendar integration)
 - [ ] AI-powered email parsing for better todo extraction
 - [ ] Priority and categorization system
 - [ ] Multi-user support

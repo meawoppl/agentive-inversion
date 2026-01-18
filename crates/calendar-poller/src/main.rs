@@ -1,5 +1,4 @@
 use anyhow::Result;
-use tokio::time::{interval, Duration};
 
 mod calendar_client;
 mod processor;
@@ -9,20 +8,8 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
 
-    tracing::info!("Starting calendar poller service");
+    tracing::warn!("Calendar poller is not yet implemented");
+    tracing::warn!("This service will exit immediately. See issue #26 for implementation status.");
 
-    let mut interval = interval(Duration::from_secs(300));
-
-    loop {
-        interval.tick().await;
-
-        if let Err(e) = poll_calendars().await {
-            tracing::error!("Error polling calendars: {}", e);
-        }
-    }
-}
-
-async fn poll_calendars() -> Result<()> {
-    tracing::info!("Polling calendars...");
     Ok(())
 }

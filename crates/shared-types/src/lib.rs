@@ -4,6 +4,42 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use uuid::Uuid;
 
+#[cfg(feature = "diesel")]
+mod json_wrapper;
+#[cfg(feature = "diesel")]
+pub use json_wrapper::JsonWrapper;
+
+// ============================================================================
+// Typed JSON Field Aliases
+// ============================================================================
+//
+// These type aliases provide type-safe access to JSON fields stored in TEXT
+// columns. Use these in database models instead of raw String fields.
+//
+// Example usage in a Queryable struct:
+//   pub conditions: TypedRuleConditions,
+//   pub action_params: Option<TypedRuleActionParams>,
+
+/// Typed wrapper for rule conditions JSON field
+#[cfg(feature = "diesel")]
+pub type TypedRuleConditions = JsonWrapper<RuleConditions>;
+
+/// Typed wrapper for rule action params JSON field
+#[cfg(feature = "diesel")]
+pub type TypedRuleActionParams = JsonWrapper<RuleActionParams>;
+
+/// Typed wrapper for proposed todo action JSON field
+#[cfg(feature = "diesel")]
+pub type TypedProposedAction = JsonWrapper<ProposedTodoAction>;
+
+/// Typed wrapper for reasoning details JSON field
+#[cfg(feature = "diesel")]
+pub type TypedReasoningDetails = JsonWrapper<ReasoningDetails>;
+
+/// Typed wrapper for calendar attendees JSON field
+#[cfg(feature = "diesel")]
+pub type TypedCalendarAttendees = JsonWrapper<Vec<CalendarAttendee>>;
+
 // ============================================================================
 // Regex Cache for Rule Matching
 // ============================================================================

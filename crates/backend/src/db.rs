@@ -1017,24 +1017,18 @@ pub mod chat_messages {
 
     pub async fn list_history(
         conn: &mut AsyncPgConnection,
-        limit: Option<i64>,
-        before: Option<DateTime<Utc>>,
+        limit_val: Option<i64>,
+        _before: Option<DateTime<Utc>>,
     ) -> anyhow::Result<Vec<ChatMessage>> {
         use crate::schema::chat_messages::dsl::*;
 
-        let mut query = chat_messages.order_by(created_at.desc()).into_boxed();
+        let limit_count = limit_val.unwrap_or(50);
 
-        if let Some(before_time) = before {
-            query = query.filter(created_at.lt(before_time));
-        }
-
-        if let Some(l) = limit {
-            query = query.limit(l);
-        } else {
-            query = query.limit(50); // Default limit
-        }
-
-        let items = query.load::<ChatMessage>(conn).await?;
+        let items = chat_messages
+            .order_by(created_at.desc())
+            .limit(limit_count)
+            .load::<ChatMessage>(conn)
+            .await?;
 
         // Return in chronological order (oldest first)
         let mut items = items;

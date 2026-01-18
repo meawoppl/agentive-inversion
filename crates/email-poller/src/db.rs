@@ -205,35 +205,40 @@ pub async fn increment_rule_match_count(
 // Agent Decisions
 // ============================================================================
 
+/// Parameters for creating a new agent decision
+#[derive(Debug, Clone)]
+pub struct CreateDecisionParams<'a> {
+    pub source_type: &'a str,
+    pub source_id: Option<Uuid>,
+    pub source_external_id: Option<&'a str>,
+    pub decision_type: &'a str,
+    pub proposed_action: &'a str,
+    pub reasoning: &'a str,
+    pub reasoning_details: Option<&'a str>,
+    pub confidence: f32,
+    pub status: &'a str,
+    pub applied_rule_id: Option<Uuid>,
+}
+
 /// Create a new agent decision
-#[allow(clippy::too_many_arguments)]
 pub async fn create_decision(
     conn: &mut AsyncPgConnection,
-    source_type_val: &str,
-    source_id_val: Option<Uuid>,
-    source_external_id_val: Option<&str>,
-    decision_type_val: &str,
-    proposed_action_val: &str,
-    reasoning_val: &str,
-    reasoning_details_val: Option<&str>,
-    confidence_val: f32,
-    status_val: &str,
-    applied_rule_id_val: Option<Uuid>,
+    params: CreateDecisionParams<'_>,
 ) -> anyhow::Result<Uuid> {
     use crate::schema::agent_decisions::dsl::*;
 
     let decision_id = diesel::insert_into(agent_decisions)
         .values((
-            source_type.eq(source_type_val),
-            source_id.eq(source_id_val),
-            source_external_id.eq(source_external_id_val),
-            decision_type.eq(decision_type_val),
-            proposed_action.eq(proposed_action_val),
-            reasoning.eq(reasoning_val),
-            reasoning_details.eq(reasoning_details_val),
-            confidence.eq(confidence_val),
-            status.eq(status_val),
-            applied_rule_id.eq(applied_rule_id_val),
+            source_type.eq(params.source_type),
+            source_id.eq(params.source_id),
+            source_external_id.eq(params.source_external_id),
+            decision_type.eq(params.decision_type),
+            proposed_action.eq(params.proposed_action),
+            reasoning.eq(params.reasoning),
+            reasoning_details.eq(params.reasoning_details),
+            confidence.eq(params.confidence),
+            status.eq(params.status),
+            applied_rule_id.eq(params.applied_rule_id),
         ))
         .returning(id)
         .get_result::<Uuid>(conn)

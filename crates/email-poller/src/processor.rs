@@ -1,7 +1,7 @@
-use crate::db::{self, DbPool, Email};
+use crate::db::{self, CreateDecisionParams, DbPool, Email};
 use shared_types::{
-    build_todo_action_from_rule, AgentRule, EmailMatchInput, ProposedTodoAction, ReasoningDetails,
-    RuleEngine, RuleMatchResult,
+    build_todo_action_from_rule, AgentRule, DecisionStatus, DecisionType, EmailMatchInput,
+    ProposedTodoAction, ReasoningDetails, RuleEngine, RuleMatchResult,
 };
 use uuid::Uuid;
 
@@ -173,7 +173,7 @@ fn process_email_with_heuristics(
     Some(EmailProcessingResult {
         email_id: email.id,
         gmail_id: email.gmail_id.clone(),
-        decision_type: "create_todo".to_string(),
+        decision_type: DecisionType::CreateTodo.as_str().to_string(),
         proposed_action,
         reasoning,
         reasoning_details,
@@ -234,15 +234,15 @@ enum ProcessedEmailOutcome {
 }
 
 /// Determine decision status and rule ID based on processing result
-fn determine_decision_status(result: &EmailProcessingResult) -> (&'static str, Option<Uuid>) {
+fn determine_decision_status(result: &EmailProcessingResult) -> (DecisionStatus, Option<Uuid>) {
     if result.auto_execute {
         if let Some(ref rule_match) = result.matched_rule {
-            ("auto_approved", Some(rule_match.rule_id))
+            (DecisionStatus::AutoApproved, Some(rule_match.rule_id))
         } else {
-            ("proposed", None)
+            (DecisionStatus::Proposed, None)
         }
     } else {
-        ("proposed", None)
+        (DecisionStatus::Proposed, None)
     }
 }
 
@@ -251,32 +251,32 @@ async fn create_decision_from_result(
     conn: &mut diesel_async::AsyncPgConnection,
     email: &Email,
     result: &EmailProcessingResult,
-    status: &str,
+    status: DecisionStatus,
     applied_rule_id: Option<Uuid>,
 ) -> anyhow::Result<Uuid> {
     let proposed_action_json = serde_json::to_string(&result.proposed_action)?;
     let reasoning_details_json = serde_json::to_string(&result.reasoning_details)?;
 
-    let decision_id = db::create_decision(
-        conn,
-        "email",
-        Some(email.id),
-        Some(&email.gmail_id),
-        &result.decision_type,
-        &proposed_action_json,
-        &result.reasoning,
-        Some(&reasoning_details_json),
-        result.confidence,
-        status,
+    let params = CreateDecisionParams {
+        source_type: "email",
+        source_id: Some(email.id),
+        source_external_id: Some(&email.gmail_id),
+        decision_type: &result.decision_type,
+        proposed_action: &proposed_action_json,
+        reasoning: &result.reasoning,
+        reasoning_details: Some(&reasoning_details_json),
+        confidence: result.confidence,
+        status: status.as_str(),
         applied_rule_id,
-    )
-    .await?;
+    };
+
+    let decision_id = db::create_decision(conn, params).await?;
 
     tracing::info!(
         "Created decision {} for email {} (status: {}, action: {})",
         decision_id,
         email.gmail_id,
-        status,
+        status.as_str(),
         result.decision_type
     );
 
@@ -341,7 +341,9 @@ async fn process_single_email(
             }
 
             // Execute auto-approved create_todo decisions
-            if status == "auto_approved" && processing_result.decision_type == "create_todo" {
+            if status == DecisionStatus::AutoApproved
+                && processing_result.decision_type == DecisionType::CreateTodo.as_str()
+            {
                 execute_auto_approved_todo(
                     conn,
                     email,

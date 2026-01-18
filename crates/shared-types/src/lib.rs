@@ -286,7 +286,7 @@ impl DecisionType {
 }
 
 /// Status of an agent decision
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DecisionStatus {
     Proposed,
     Approved,

@@ -10,9 +10,8 @@ use shared_types::{
     CalendarEventResponse, Category, ChatHistoryQuery, ChatIntent, ChatMessageResponse,
     ChatResponse, ConnectEmailAccountRequest, CreateAgentDecisionRequest, CreateAgentRuleRequest,
     CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailAccountResponse, EmailListQuery,
-    EmailResponse, ProposedTodoAction, RejectDecisionRequest, RuleListQuery,
-    SendChatMessageRequest, SuggestedAction, Todo, UpdateAgentRuleRequest, UpdateCategoryRequest,
-    UpdateTodoRequest,
+    EmailResponse, RejectDecisionRequest, RuleListQuery, SendChatMessageRequest, SuggestedAction,
+    Todo, UpdateAgentRuleRequest, UpdateCategoryRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 
@@ -20,6 +19,7 @@ use crate::db::{
     agent_rules, calendar_accounts, calendar_events, categories, chat_messages, decisions,
     email_accounts, emails, todos, DbPool,
 };
+use crate::services::DecisionService;
 
 // Todo handlers
 pub async fn list_todos(State(pool): State<DbPool>) -> Result<Json<Vec<Todo>>, StatusCode> {
@@ -610,62 +610,14 @@ pub async fn approve_decision(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Get the decision first
-    let decision = decisions::get_by_id(&mut conn, id).await.map_err(|e| {
-        tracing::error!("Failed to get decision: {:?}", e);
-        StatusCode::NOT_FOUND
-    })?;
-
-    // If decision type is create_todo, create the todo
-    let todo_id = if decision.decision_type == "create_todo" {
-        // Use modifications if provided, otherwise use proposed_action
-        let action: ProposedTodoAction = if let Some(mods) = payload.modifications {
-            mods
-        } else {
-            serde_json::from_str(&decision.proposed_action).map_err(|e| {
-                tracing::error!("Failed to parse proposed_action: {:?}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
-        };
-
-        let todo = todos::create(
-            &mut conn,
-            &action.todo_title,
-            action.todo_description.as_deref(),
-            action.due_date,
-            None, // link
-            action.category_id,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to create todo from decision: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-        Some(todo.id)
-    } else {
-        None
-    };
-
-    // Update the decision status
-    let updated = decisions::approve(&mut conn, id, todo_id)
+    let result = DecisionService::approve(&mut conn, id, payload.modifications)
         .await
         .map_err(|e| {
             tracing::error!("Failed to approve decision: {:?}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // Mark as executed since we've already created the todo
-    let final_decision = if todo_id.is_some() {
-        decisions::mark_executed(&mut conn, id).await.map_err(|e| {
-            tracing::error!("Failed to mark decision as executed: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-    } else {
-        updated
-    };
-
-    Ok(Json(final_decision.into()))
+    Ok(Json(result.decision.into()))
 }
 
 pub async fn reject_decision(
@@ -678,7 +630,7 @@ pub async fn reject_decision(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let decision = decisions::reject(&mut conn, id, payload.feedback.as_deref())
+    let decision = DecisionService::reject(&mut conn, id, payload.feedback.as_deref())
         .await
         .map_err(|e| {
             tracing::error!("Failed to reject decision: {:?}", e);
@@ -708,107 +660,53 @@ pub async fn batch_approve_decisions(
     State(pool): State<DbPool>,
     Json(payload): Json<BatchApproveDecisionsRequest>,
 ) -> Result<Json<BatchOperationResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
+    let result = DecisionService::batch_approve(&pool, payload.decision_ids)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!("Failed to batch approve decisions: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    let mut successful = Vec::new();
-    let mut failed = Vec::new();
+    let failed = result
+        .failed
+        .into_iter()
+        .map(|f| BatchOperationFailure {
+            id: f.id,
+            error: f.error,
+        })
+        .collect();
 
-    for decision_id in payload.decision_ids {
-        // Get the decision
-        let decision = match decisions::get_by_id(&mut conn, decision_id).await {
-            Ok(d) => d,
-            Err(e) => {
-                failed.push(BatchOperationFailure {
-                    id: decision_id,
-                    error: format!("Decision not found: {}", e),
-                });
-                continue;
-            }
-        };
-
-        // Create todo if decision type is create_todo
-        let todo_id = if decision.decision_type == "create_todo" {
-            let action: ProposedTodoAction = match serde_json::from_str(&decision.proposed_action) {
-                Ok(a) => a,
-                Err(e) => {
-                    failed.push(BatchOperationFailure {
-                        id: decision_id,
-                        error: format!("Failed to parse proposed_action: {}", e),
-                    });
-                    continue;
-                }
-            };
-
-            match todos::create(
-                &mut conn,
-                &action.todo_title,
-                action.todo_description.as_deref(),
-                action.due_date,
-                None,
-                action.category_id,
-            )
-            .await
-            {
-                Ok(todo) => Some(todo.id),
-                Err(e) => {
-                    failed.push(BatchOperationFailure {
-                        id: decision_id,
-                        error: format!("Failed to create todo: {}", e),
-                    });
-                    continue;
-                }
-            }
-        } else {
-            None
-        };
-
-        // Approve and mark as executed
-        if let Err(e) = decisions::approve(&mut conn, decision_id, todo_id).await {
-            failed.push(BatchOperationFailure {
-                id: decision_id,
-                error: format!("Failed to approve: {}", e),
-            });
-            continue;
-        }
-
-        if todo_id.is_some() {
-            if let Err(e) = decisions::mark_executed(&mut conn, decision_id).await {
-                tracing::warn!("Failed to mark decision as executed: {}", e);
-            }
-        }
-
-        successful.push(decision_id);
-    }
-
-    Ok(Json(BatchOperationResponse { successful, failed }))
+    Ok(Json(BatchOperationResponse {
+        successful: result.successful,
+        failed,
+    }))
 }
 
 pub async fn batch_reject_decisions(
     State(pool): State<DbPool>,
     Json(payload): Json<BatchRejectDecisionsRequest>,
 ) -> Result<Json<BatchOperationResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result =
+        DecisionService::batch_reject(&pool, payload.decision_ids, payload.feedback.as_deref())
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to batch reject decisions: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
-    let mut successful = Vec::new();
-    let mut failed = Vec::new();
+    let failed = result
+        .failed
+        .into_iter()
+        .map(|f| BatchOperationFailure {
+            id: f.id,
+            error: f.error,
+        })
+        .collect();
 
-    for decision_id in payload.decision_ids {
-        match decisions::reject(&mut conn, decision_id, payload.feedback.as_deref()).await {
-            Ok(_) => successful.push(decision_id),
-            Err(e) => failed.push(BatchOperationFailure {
-                id: decision_id,
-                error: format!("Failed to reject: {}", e),
-            }),
-        }
-    }
-
-    Ok(Json(BatchOperationResponse { successful, failed }))
+    Ok(Json(BatchOperationResponse {
+        successful: result.successful,
+        failed,
+    }))
 }
 
 // Agent rules handlers

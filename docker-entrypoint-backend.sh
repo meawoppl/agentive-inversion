@@ -20,11 +20,5 @@ for migration in /app/migrations/*/up.sql; do
   psql "$DATABASE_URL" -f "$migration" 2>&1 || echo "Migration already applied or failed: $migration"
 done
 
-# Check if seed data file exists
-if [ -f "/app/seed-data.sql" ]; then
-  echo "Loading seed data..."
-  psql "$DATABASE_URL" -f /app/seed-data.sql 2>&1 || echo "Seed data already loaded or failed"
-fi
-
 echo "Starting backend server..."
 exec /app/backend

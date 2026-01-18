@@ -27,7 +27,7 @@ docker-compose up --build
 
 This will:
 1. Start PostgreSQL database
-2. Build and start the backend (runs migrations + seeds test data)
+2. Build and start the backend (runs migrations)
 3. Build and start the frontend
 
 ### 2. Access the Application
@@ -49,7 +49,13 @@ docker-compose down -v
 
 ## Test Data
 
-The setup automatically seeds the database with sample data:
+To load sample test data, use the dev script:
+
+```bash
+./dev.sh db:seed
+```
+
+This loads `seed-data.sql` which includes:
 
 **Sample Todos:**
 - 5 manual todos (including completed items)
@@ -104,8 +110,11 @@ SELECT * FROM calendar_accounts;
 # Stop containers and remove volumes
 docker-compose down -v
 
-# Start fresh (will re-run migrations and seed data)
+# Start fresh (will re-run migrations)
 docker-compose up --build
+
+# Optionally load seed data
+./dev.sh db:seed
 ```
 
 ## Architecture

@@ -162,3 +162,34 @@ pub struct UpdateCategoryRequest {
     pub name: Option<String>,
     pub color: Option<String>,
 }
+
+/// API response for emails
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailResponse {
+    pub id: Uuid,
+    pub account_id: Uuid,
+    pub gmail_id: String,
+    pub thread_id: String,
+    pub subject: String,
+    pub from_address: String,
+    pub from_name: Option<String>,
+    pub to_addresses: Vec<String>,
+    pub snippet: Option<String>,
+    pub has_attachments: bool,
+    pub received_at: DateTime<Utc>,
+    pub processed: bool,
+    pub archived_in_gmail: bool,
+}
+
+/// Query parameters for listing emails
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EmailListQuery {
+    pub account_id: Option<Uuid>,
+    pub processed: Option<bool>,
+    pub from: Option<String>,
+    pub subject: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}

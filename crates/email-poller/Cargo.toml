@@ -32,6 +32,11 @@ base64 = "0.22.1"
 urlencoding = "2.1.3"
 chrono-tz = "0.10.4"
 futures = "0.3"
+diesel = { workspace = true, features = ["postgres", "uuid", "chrono"] }
+diesel-async = { workspace = true, features = ["postgres", "deadpool"] }
+tokio-postgres = "0.7.16"
+tokio-postgres-rustls = "0.13.0"
+webpki-roots = "1.0.5"
 
 [dev-dependencies]
 tokio-test = "0.4"

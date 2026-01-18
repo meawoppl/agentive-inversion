@@ -1,12 +1,15 @@
 use crate::config::{Config, GmailConfig};
+use crate::db::{self, DbPool, NewEmail};
 use crate::gmail_client::{EmailMessage, GmailClient};
 use anyhow::{Context, Result};
+use chrono::Utc;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
+use uuid::Uuid;
 
 /// Tracks the last poll time for each account (by email)
 pub struct RateLimiter {
@@ -86,7 +89,7 @@ pub struct AccountState {
     pub last_history_id: Option<u64>,
 }
 
-/// Poll a single account and download new emails
+/// Poll a single account and download new emails to file system (legacy)
 pub async fn poll_account(
     account: &GmailConfig,
     state: &AccountState,
@@ -116,7 +119,42 @@ pub async fn poll_account(
     Ok(PollResult { count, history_id })
 }
 
-/// Save emails to disk
+/// Poll a single account and store emails in database
+pub async fn poll_account_to_db(
+    account: &GmailConfig,
+    account_id: Uuid,
+    state: &AccountState,
+    pool: &DbPool,
+    max_fetch_per_poll: u32,
+) -> Result<PollResult> {
+    tracing::info!(
+        "Polling {} ({}) to database...",
+        account.name,
+        account.email
+    );
+
+    let client = GmailClient::new(account)
+        .await
+        .context("Failed to create Gmail client")?;
+
+    let emails = match state.last_history_id {
+        Some(history_id) if history_id > 0 => {
+            client
+                .fetch_messages_since(history_id, max_fetch_per_poll)
+                .await?
+        }
+        _ => client.fetch_messages(max_fetch_per_poll).await?,
+    };
+
+    let count = save_emails_to_db(&emails, account_id, pool).await?;
+
+    // Get current history ID for next sync
+    let history_id = client.get_history_id().await.ok();
+
+    Ok(PollResult { count, history_id })
+}
+
+/// Save emails to disk (legacy)
 fn save_emails(emails: &[EmailMessage], account_email: &str, inbox_dir: &Path) -> Result<usize> {
     let mut count = 0;
 
@@ -149,6 +187,77 @@ fn save_emails(emails: &[EmailMessage], account_email: &str, inbox_dir: &Path) -
     }
 
     Ok(count)
+}
+
+/// Save emails to database
+async fn save_emails_to_db(
+    emails: &[EmailMessage],
+    account_id: Uuid,
+    pool: &DbPool,
+) -> Result<usize> {
+    let mut conn = pool.get().await.context("Failed to get DB connection")?;
+    let mut count = 0;
+
+    for email in emails {
+        // Parse "From" header into address and name
+        let (from_address, from_name) = parse_from_header(&email.from);
+
+        let new_email = NewEmail {
+            account_id,
+            gmail_id: email.id.clone(),
+            thread_id: email.thread_id.clone(),
+            history_id: email.history_id.map(|h| h as i64),
+            subject: email.subject.clone(),
+            from_address,
+            from_name,
+            to_addresses: vec![], // TODO: Parse To header when available
+            cc_addresses: None,
+            snippet: Some(email.snippet.clone()),
+            body_text: email.body.clone(),
+            body_html: None,        // TODO: Extract HTML body when available
+            labels: None,           // TODO: Get labels from Gmail API
+            has_attachments: false, // TODO: Detect attachments
+            received_at: email.received_at.unwrap_or_else(Utc::now),
+        };
+
+        match db::insert_email(&mut conn, new_email).await {
+            Ok(Some(_)) => {
+                tracing::info!("  Stored: {} - {}", email.id, email.subject);
+                count += 1;
+            }
+            Ok(None) => {
+                tracing::debug!("  Skipped (duplicate): {}", email.id);
+            }
+            Err(e) => {
+                tracing::warn!("  Failed to store {}: {}", email.id, e);
+            }
+        }
+    }
+
+    Ok(count)
+}
+
+/// Parse a "From" header like "John Doe <john@example.com>" into (address, name)
+fn parse_from_header(from: &str) -> (String, Option<String>) {
+    let from = from.trim();
+
+    // Check for format: "Name <email@example.com>"
+    if let Some(bracket_start) = from.rfind('<') {
+        if let Some(bracket_end) = from.rfind('>') {
+            let address = from[bracket_start + 1..bracket_end].trim().to_string();
+            let name = from[..bracket_start].trim();
+            let name = name.trim_matches('"').trim();
+            let name = if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            };
+            return (address, name);
+        }
+    }
+
+    // Plain email address
+    (from.to_string(), None)
 }
 
 /// Email metadata stored in the JSON files (for archiving)

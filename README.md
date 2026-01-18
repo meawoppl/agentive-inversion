@@ -89,10 +89,8 @@ Edit `.env` with your configuration:
 
 ```bash
 DATABASE_URL=postgres://user:password@db.neon.tech/agentive_inversion?sslmode=require
-GMAIL_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GMAIL_CLIENT_SECRET=your-client-secret
-GOOGLE_CALENDAR_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CALENDAR_CLIENT_SECRET=your-client-secret
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
 ```
 
 ### 3. Database Setup

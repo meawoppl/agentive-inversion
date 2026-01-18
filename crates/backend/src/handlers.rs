@@ -7,14 +7,17 @@ use serde::{Deserialize, Serialize};
 use shared_types::{
     AgentDecisionResponse, AgentRuleResponse, ApproveDecisionRequest, BatchApproveDecisionsRequest,
     BatchOperationFailure, BatchOperationResponse, BatchRejectDecisionsRequest, Category,
-    ConnectEmailAccountRequest, CreateAgentDecisionRequest, CreateAgentRuleRequest,
-    CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailAccountResponse, EmailListQuery,
-    EmailResponse, ProposedTodoAction, RejectDecisionRequest, RuleListQuery, Todo,
+    ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse, ConnectEmailAccountRequest,
+    CreateAgentDecisionRequest, CreateAgentRuleRequest, CreateCategoryRequest, CreateTodoRequest,
+    DecisionStats, EmailAccountResponse, EmailListQuery, EmailResponse, ProposedTodoAction,
+    RejectDecisionRequest, RuleListQuery, SendChatMessageRequest, SuggestedAction, Todo,
     UpdateAgentRuleRequest, UpdateCategoryRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 
-use crate::db::{agent_rules, categories, decisions, email_accounts, emails, todos, DbPool};
+use crate::db::{
+    agent_rules, categories, chat_messages, decisions, email_accounts, emails, todos, DbPool,
+};
 
 // Todo handlers
 pub async fn list_todos(State(pool): State<DbPool>) -> Result<Json<Vec<Todo>>, StatusCode> {
@@ -976,4 +979,261 @@ pub async fn toggle_agent_rule_active(
         id: updated.id,
         is_active: updated.is_active,
     }))
+}
+
+// ============================================================================
+// Chat handlers
+// ============================================================================
+
+pub async fn get_chat_history(
+    State(pool): State<DbPool>,
+    Query(query): Query<ChatHistoryQuery>,
+) -> Result<Json<Vec<ChatMessageResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let messages = chat_messages::list_history(&mut conn, query.limit, query.before)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get chat history: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let responses: Vec<ChatMessageResponse> = messages.into_iter().map(Into::into).collect();
+    Ok(Json(responses))
+}
+
+pub async fn send_chat_message(
+    State(pool): State<DbPool>,
+    Json(payload): Json<SendChatMessageRequest>,
+) -> Result<Json<ChatResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Detect intent from the message content
+    let (detected_intent, suggested_actions) = classify_intent(&payload.content, &mut conn).await;
+
+    // Save the user's message
+    let _user_message = chat_messages::create(&mut conn, "user", &payload.content, None)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to save user message: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Generate assistant response based on intent
+    let assistant_response = generate_response(&detected_intent, &payload.content, &mut conn).await;
+
+    // Save the assistant's response
+    let assistant_message = chat_messages::create(
+        &mut conn,
+        "assistant",
+        &assistant_response,
+        Some(detected_intent.as_str()),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to save assistant message: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(ChatResponse {
+        message: assistant_message.into(),
+        detected_intent: Some(detected_intent.as_str().to_string()),
+        suggested_actions,
+    }))
+}
+
+pub async fn clear_chat_history(State(pool): State<DbPool>) -> Result<StatusCode, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    chat_messages::delete_all(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to clear chat history: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// Intent classification - simple keyword-based for now
+async fn classify_intent(
+    content: &str,
+    conn: &mut diesel_async::AsyncPgConnection,
+) -> (ChatIntent, Vec<SuggestedAction>) {
+    let lower = content.to_lowercase();
+    let mut actions = Vec::new();
+
+    // Check for todo creation intent
+    if lower.contains("add")
+        || lower.contains("create")
+        || lower.contains("new task")
+        || lower.contains("remind me")
+        || lower.contains("todo")
+    {
+        // Extract potential todo title from the message
+        let title = extract_todo_title(content);
+        if !title.is_empty() {
+            actions.push(SuggestedAction {
+                label: format!("Create: {}", truncate_str(&title, 30)),
+                action_type: "create_todo".to_string(),
+                payload: serde_json::json!({ "title": title }),
+            });
+        }
+        return (ChatIntent::CreateTodo, actions);
+    }
+
+    // Check for todo query intent
+    if lower.contains("show")
+        || lower.contains("list")
+        || lower.contains("what")
+        || lower.contains("my tasks")
+        || lower.contains("my todos")
+    {
+        actions.push(SuggestedAction {
+            label: "View all todos".to_string(),
+            action_type: "navigate".to_string(),
+            payload: serde_json::json!({ "view": "todos" }),
+        });
+        return (ChatIntent::QueryTodos, actions);
+    }
+
+    // Check for completion intent
+    if lower.contains("done") || lower.contains("complete") || lower.contains("finish") {
+        return (ChatIntent::MarkComplete, actions);
+    }
+
+    // Check for decision-related intents
+    if lower.contains("decision") || lower.contains("pending") || lower.contains("review") {
+        // Check if there are pending decisions
+        if let Ok(pending) = decisions::list_pending(conn).await {
+            if !pending.is_empty() {
+                actions.push(SuggestedAction {
+                    label: format!("Review {} pending", pending.len()),
+                    action_type: "navigate".to_string(),
+                    payload: serde_json::json!({ "view": "decisions" }),
+                });
+            }
+        }
+        return (ChatIntent::QueryDecisions, actions);
+    }
+
+    // Check for approval intent
+    if lower.contains("approve") || lower.contains("accept") {
+        return (ChatIntent::ApproveDecision, actions);
+    }
+
+    // Check for help intent
+    if lower.contains("help") || lower.contains("what can you") || lower.contains("how do") {
+        return (ChatIntent::Help, actions);
+    }
+
+    (ChatIntent::General, actions)
+}
+
+async fn generate_response(
+    intent: &ChatIntent,
+    _content: &str,
+    conn: &mut diesel_async::AsyncPgConnection,
+) -> String {
+    match intent {
+        ChatIntent::CreateTodo => {
+            "I can help you create a todo. Use the suggested action above, or tell me more details about the task you want to add.".to_string()
+        }
+        ChatIntent::QueryTodos => {
+            // Get todo stats
+            match todos::list_all(conn).await {
+                Ok(all_todos) => {
+                    let total = all_todos.len();
+                    let completed = all_todos.iter().filter(|t| t.completed).count();
+                    let pending = total - completed;
+                    format!(
+                        "You have {} todos: {} pending and {} completed. Click 'View all todos' to see them.",
+                        total, pending, completed
+                    )
+                }
+                Err(_) => "I couldn't retrieve your todos. Please try again.".to_string(),
+            }
+        }
+        ChatIntent::MarkComplete => {
+            "To mark a task as complete, navigate to your todos and click the checkbox next to the task.".to_string()
+        }
+        ChatIntent::QueryDecisions => {
+            match decisions::list_pending(conn).await {
+                Ok(pending) => {
+                    if pending.is_empty() {
+                        "You have no pending decisions to review. Great job staying on top of things!".to_string()
+                    } else {
+                        format!(
+                            "You have {} pending decisions awaiting review. Click 'Review pending' to see them.",
+                            pending.len()
+                        )
+                    }
+                }
+                Err(_) => "I couldn't retrieve your decisions. Please try again.".to_string(),
+            }
+        }
+        ChatIntent::ApproveDecision => {
+            "To approve decisions, go to the decision inbox and click 'Approve' on individual decisions, or use batch approve for multiple at once.".to_string()
+        }
+        ChatIntent::RejectDecision => {
+            "To reject decisions, go to the decision inbox and click 'Reject' on individual decisions. You can optionally provide feedback.".to_string()
+        }
+        ChatIntent::ModifyTodo => {
+            "To modify a todo, navigate to your todos list and click on the todo you want to edit.".to_string()
+        }
+        ChatIntent::QueryEmails => {
+            "Email viewing is available through the decision inbox when emails trigger agent decisions.".to_string()
+        }
+        ChatIntent::Help => {
+            "I can help you with:\n\
+            - Creating todos: \"Add a task to call John\"\n\
+            - Viewing todos: \"Show my tasks\"\n\
+            - Reviewing decisions: \"Show pending decisions\"\n\
+            - Quick questions about your task management\n\n\
+            Just type naturally and I'll try to help!".to_string()
+        }
+        ChatIntent::General => {
+            "I'm here to help you manage your tasks and review agent decisions. Try asking me to create a todo, show your tasks, or review pending decisions.".to_string()
+        }
+    }
+}
+
+fn extract_todo_title(content: &str) -> String {
+    // Simple extraction: remove common prefixes
+    let lower = content.to_lowercase();
+    let prefixes = [
+        "add ",
+        "create ",
+        "new task ",
+        "remind me to ",
+        "todo ",
+        "add a ",
+        "create a ",
+        "i need to ",
+        "don't forget to ",
+    ];
+
+    for prefix in prefixes {
+        if lower.starts_with(prefix) {
+            return content[prefix.len()..].trim().to_string();
+        }
+    }
+
+    // If no prefix matched, return the original content trimmed
+    content.trim().to_string()
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len - 3])
+    }
 }

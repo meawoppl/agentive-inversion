@@ -4,7 +4,7 @@ use diesel_async::{
     pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager, ManagerConfig},
     AsyncPgConnection, RunQueryDsl,
 };
-use shared_types::{AgentDecision, AgentRule, Category, EmailAccount, Todo};
+use shared_types::{AgentDecision, AgentRule, Category, ChatMessage, EmailAccount, Todo};
 use uuid::Uuid;
 
 use crate::models::AgentDecisionRow;
@@ -1007,5 +1007,66 @@ pub mod agent_rules {
             .await?;
 
         Ok(updated)
+    }
+}
+
+// Chat messages database operations
+#[allow(dead_code)]
+pub mod chat_messages {
+    use super::*;
+
+    pub async fn list_history(
+        conn: &mut AsyncPgConnection,
+        limit: Option<i64>,
+        before: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<Vec<ChatMessage>> {
+        use crate::schema::chat_messages::dsl::*;
+
+        let mut query = chat_messages.order_by(created_at.desc()).into_boxed();
+
+        if let Some(before_time) = before {
+            query = query.filter(created_at.lt(before_time));
+        }
+
+        if let Some(l) = limit {
+            query = query.limit(l);
+        } else {
+            query = query.limit(50); // Default limit
+        }
+
+        let items = query.load::<ChatMessage>(conn).await?;
+
+        // Return in chronological order (oldest first)
+        let mut items = items;
+        items.reverse();
+        Ok(items)
+    }
+
+    pub async fn create(
+        conn: &mut AsyncPgConnection,
+        role_val: &str,
+        content_val: &str,
+        intent_val: Option<&str>,
+    ) -> anyhow::Result<ChatMessage> {
+        use crate::schema::chat_messages::dsl::*;
+
+        let new_message = diesel::insert_into(chat_messages)
+            .values((
+                role.eq(role_val),
+                content.eq(content_val),
+                intent.eq(intent_val),
+            ))
+            .get_result::<ChatMessage>(conn)
+            .await?;
+
+        Ok(new_message)
+    }
+
+    pub async fn delete_all(conn: &mut AsyncPgConnection) -> anyhow::Result<()> {
+        use crate::schema::chat_messages::dsl::*;
+
+        diesel::delete(chat_messages).execute(conn).await?;
+
+        Ok(())
     }
 }

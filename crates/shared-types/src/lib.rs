@@ -1230,3 +1230,141 @@ mod tests {
         assert!(cache.contains_key(r".*@example\.com$"));
     }
 }
+
+// ============================================================================
+// Chat Types
+// ============================================================================
+
+/// Role of a chat message participant
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChatRole {
+    User,
+    Assistant,
+}
+
+impl ChatRole {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ChatRole::User => "user",
+            ChatRole::Assistant => "assistant",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(ChatRole::User),
+            "assistant" => Some(ChatRole::Assistant),
+            _ => None,
+        }
+    }
+}
+
+/// Intent detected from user chat message
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChatIntent {
+    CreateTodo,
+    QueryTodos,
+    MarkComplete,
+    ModifyTodo,
+    QueryEmails,
+    QueryDecisions,
+    ApproveDecision,
+    RejectDecision,
+    Help,
+    General,
+}
+
+impl ChatIntent {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ChatIntent::CreateTodo => "create_todo",
+            ChatIntent::QueryTodos => "query_todos",
+            ChatIntent::MarkComplete => "mark_complete",
+            ChatIntent::ModifyTodo => "modify_todo",
+            ChatIntent::QueryEmails => "query_emails",
+            ChatIntent::QueryDecisions => "query_decisions",
+            ChatIntent::ApproveDecision => "approve_decision",
+            ChatIntent::RejectDecision => "reject_decision",
+            ChatIntent::Help => "help",
+            ChatIntent::General => "general",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "create_todo" => Some(ChatIntent::CreateTodo),
+            "query_todos" => Some(ChatIntent::QueryTodos),
+            "mark_complete" => Some(ChatIntent::MarkComplete),
+            "modify_todo" => Some(ChatIntent::ModifyTodo),
+            "query_emails" => Some(ChatIntent::QueryEmails),
+            "query_decisions" => Some(ChatIntent::QueryDecisions),
+            "approve_decision" => Some(ChatIntent::ApproveDecision),
+            "reject_decision" => Some(ChatIntent::RejectDecision),
+            "help" => Some(ChatIntent::Help),
+            "general" => Some(ChatIntent::General),
+            _ => None,
+        }
+    }
+}
+
+/// Chat message database model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
+pub struct ChatMessage {
+    pub id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub intent: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// API response for chat messages
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatMessageResponse {
+    pub id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub intent: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<ChatMessage> for ChatMessageResponse {
+    fn from(msg: ChatMessage) -> Self {
+        ChatMessageResponse {
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            intent: msg.intent,
+            created_at: msg.created_at,
+        }
+    }
+}
+
+/// Request to send a chat message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendChatMessageRequest {
+    pub content: String,
+}
+
+/// Response from sending a chat message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatResponse {
+    pub message: ChatMessageResponse,
+    pub detected_intent: Option<String>,
+    pub suggested_actions: Vec<SuggestedAction>,
+}
+
+/// Suggested action that can be taken from chat
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestedAction {
+    pub label: String,
+    pub action_type: String,
+    pub payload: serde_json::Value,
+}
+
+/// Query parameters for chat history
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatHistoryQuery {
+    pub limit: Option<i64>,
+    pub before: Option<DateTime<Utc>>,
+}

@@ -1,10 +1,10 @@
 use axum::{
-    http::StatusCode,
+    http::{header, Method, StatusCode},
     routing::{delete, get, post, put},
     Router,
 };
 use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 mod db;
 mod handlers;
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/rules/:id/toggle",
             post(handlers::toggle_agent_rule_active),
         )
-        .layer(CorsLayer::permissive())
+        .layer(build_cors_layer())
         .with_state(pool);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
@@ -86,4 +86,47 @@ async fn main() -> anyhow::Result<()> {
 
 async fn health_check() -> StatusCode {
     StatusCode::OK
+}
+
+/// Build CORS layer based on environment configuration.
+///
+/// If CORS_ALLOWED_ORIGINS is set, only those origins are allowed.
+/// If not set, defaults to permissive CORS (for development only).
+fn build_cors_layer() -> CorsLayer {
+    let allowed_origins = std::env::var("CORS_ALLOWED_ORIGINS").ok();
+
+    match allowed_origins {
+        Some(origins) => {
+            let origins: Vec<_> = origins
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+
+            if origins.is_empty() {
+                tracing::warn!(
+                    "CORS_ALLOWED_ORIGINS is set but empty, using permissive CORS (not recommended for production)"
+                );
+                CorsLayer::permissive()
+            } else {
+                tracing::info!("CORS configured for origins: {:?}", origins);
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::list(origins))
+                    .allow_methods([
+                        Method::GET,
+                        Method::POST,
+                        Method::PUT,
+                        Method::DELETE,
+                        Method::OPTIONS,
+                    ])
+                    .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+                    .allow_credentials(true)
+            }
+        }
+        None => {
+            tracing::warn!(
+                "CORS_ALLOWED_ORIGINS not set, using permissive CORS (not recommended for production)"
+            );
+            CorsLayer::permissive()
+        }
+    }
 }

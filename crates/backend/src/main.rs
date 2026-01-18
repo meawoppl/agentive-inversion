@@ -14,6 +14,7 @@ pub mod error;
 mod handlers;
 mod models;
 mod pollers;
+pub mod repository;
 mod schema;
 mod services;
 

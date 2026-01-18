@@ -62,6 +62,16 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::approve_decision),
         )
         .route("/api/decisions/:id/reject", post(handlers::reject_decision))
+        // Agent rules routes
+        .route("/api/rules", get(handlers::list_agent_rules))
+        .route("/api/rules", post(handlers::create_agent_rule))
+        .route("/api/rules/:id", get(handlers::get_agent_rule))
+        .route("/api/rules/:id", put(handlers::update_agent_rule))
+        .route("/api/rules/:id", delete(handlers::delete_agent_rule))
+        .route(
+            "/api/rules/:id/toggle",
+            post(handlers::toggle_agent_rule_active),
+        )
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

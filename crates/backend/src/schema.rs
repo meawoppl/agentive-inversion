@@ -1,6 +1,26 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    agent_rules (id) {
+        id -> Uuid,
+        name -> Varchar,
+        description -> Nullable<Text>,
+        source_type -> Varchar,
+        rule_type -> Varchar,
+        conditions -> Text,
+        action -> Varchar,
+        action_params -> Nullable<Text>,
+        priority -> Int4,
+        is_active -> Bool,
+        created_from_decision_id -> Nullable<Uuid>,
+        match_count -> Int4,
+        last_matched_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     agent_decisions (id) {
         id -> Uuid,
         source_type -> Varchar,
@@ -110,6 +130,7 @@ diesel::joinable!(emails -> email_accounts (account_id));
 diesel::joinable!(todos -> categories (category_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    agent_rules,
     agent_decisions,
     calendar_accounts,
     categories,

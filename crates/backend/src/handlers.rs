@@ -5,14 +5,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use shared_types::{
-    AgentDecisionResponse, ApproveDecisionRequest, Category, ConnectEmailAccountRequest,
-    CreateAgentDecisionRequest, CreateCategoryRequest, CreateTodoRequest, DecisionStats,
-    EmailAccountResponse, EmailListQuery, EmailResponse, ProposedTodoAction, RejectDecisionRequest,
-    Todo, UpdateCategoryRequest, UpdateTodoRequest,
+    AgentDecisionResponse, AgentRuleResponse, ApproveDecisionRequest, Category,
+    ConnectEmailAccountRequest, CreateAgentDecisionRequest, CreateAgentRuleRequest,
+    CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailAccountResponse, EmailListQuery,
+    EmailResponse, ProposedTodoAction, RejectDecisionRequest, RuleListQuery, Todo,
+    UpdateAgentRuleRequest, UpdateCategoryRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 
-use crate::db::{categories, decisions, email_accounts, emails, todos, DbPool};
+use crate::db::{agent_rules, categories, decisions, email_accounts, emails, todos, DbPool};
 
 // Todo handlers
 pub async fn list_todos(State(pool): State<DbPool>) -> Result<Json<Vec<Todo>>, StatusCode> {
@@ -691,4 +692,176 @@ pub async fn get_decision_stats(
     })?;
 
     Ok(Json(stats))
+}
+
+// Agent rules handlers
+pub async fn list_agent_rules(
+    State(pool): State<DbPool>,
+    Query(query): Query<RuleListQuery>,
+) -> Result<Json<Vec<AgentRuleResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let rules = if let Some(source) = &query.source_type {
+        agent_rules::list_by_source_type(&mut conn, source)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to list agent rules: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+    } else if query.is_active == Some(true) {
+        agent_rules::list_active(&mut conn).await.map_err(|e| {
+            tracing::error!("Failed to list agent rules: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    } else {
+        agent_rules::list_all(&mut conn).await.map_err(|e| {
+            tracing::error!("Failed to list agent rules: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    };
+
+    let responses: Vec<AgentRuleResponse> = rules
+        .into_iter()
+        .filter_map(|r| r.try_into().ok())
+        .collect();
+
+    Ok(Json(responses))
+}
+
+pub async fn get_agent_rule(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AgentRuleResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let rule = agent_rules::get_by_id(&mut conn, id).await.map_err(|e| {
+        tracing::error!("Failed to get agent rule: {:?}", e);
+        StatusCode::NOT_FOUND
+    })?;
+
+    let response: AgentRuleResponse = rule.try_into().map_err(|e| {
+        tracing::error!("Failed to parse agent rule: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(response))
+}
+
+pub async fn create_agent_rule(
+    State(pool): State<DbPool>,
+    Json(payload): Json<CreateAgentRuleRequest>,
+) -> Result<Json<AgentRuleResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let rule = agent_rules::create(&mut conn, &payload)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create agent rule: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let response: AgentRuleResponse = rule.try_into().map_err(|e| {
+        tracing::error!("Failed to parse agent rule: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(response))
+}
+
+pub async fn update_agent_rule(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateAgentRuleRequest>,
+) -> Result<Json<AgentRuleResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let rule = agent_rules::update(
+        &mut conn,
+        id,
+        payload.name.as_deref(),
+        payload.description.as_deref(),
+        payload.source_type.as_deref(),
+        payload.rule_type.as_deref(),
+        payload.conditions.as_ref(),
+        payload.action.as_deref(),
+        payload.action_params.as_ref(),
+        payload.priority,
+        payload.is_active,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to update agent rule: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let response: AgentRuleResponse = rule.try_into().map_err(|e| {
+        tracing::error!("Failed to parse agent rule: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(response))
+}
+
+pub async fn delete_agent_rule(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    agent_rules::delete(&mut conn, id).await.map_err(|e| {
+        tracing::error!("Failed to delete agent rule: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToggleActiveResponse {
+    pub id: Uuid,
+    pub is_active: bool,
+}
+
+pub async fn toggle_agent_rule_active(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ToggleActiveResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Get current state
+    let current = agent_rules::get_by_id(&mut conn, id).await.map_err(|e| {
+        tracing::error!("Failed to get agent rule: {:?}", e);
+        StatusCode::NOT_FOUND
+    })?;
+
+    // Toggle it
+    let updated = agent_rules::set_active(&mut conn, id, !current.is_active)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to toggle agent rule: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(ToggleActiveResponse {
+        id: updated.id,
+        is_active: updated.is_active,
+    }))
 }

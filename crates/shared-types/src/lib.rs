@@ -216,7 +216,7 @@ impl DecisionSourceType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "email" => Some(DecisionSourceType::Email),
             "calendar" => Some(DecisionSourceType::Calendar),
@@ -249,7 +249,7 @@ impl DecisionType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "create_todo" => Some(DecisionType::CreateTodo),
             "ignore" => Some(DecisionType::Ignore),
@@ -285,7 +285,7 @@ impl DecisionStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "proposed" => Some(DecisionStatus::Proposed),
             "approved" => Some(DecisionStatus::Approved),

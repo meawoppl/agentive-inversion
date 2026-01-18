@@ -4,7 +4,7 @@ use diesel_async::{
     pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager, ManagerConfig},
     AsyncPgConnection, RunQueryDsl,
 };
-use shared_types::{Category, EmailAccount, Todo};
+use shared_types::{AgentRule, Category, EmailAccount, Todo};
 use uuid::Uuid;
 
 pub type DbPool = Pool<AsyncPgConnection>;
@@ -528,5 +528,221 @@ pub mod categories {
             .await?;
 
         Ok(())
+    }
+}
+
+// Agent rules database operations
+#[allow(dead_code)]
+pub mod agent_rules {
+    use super::*;
+    use shared_types::{CreateAgentRuleRequest, RuleActionParams, RuleConditions};
+
+    pub async fn list_all(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<AgentRule>> {
+        use crate::schema::agent_rules::dsl::*;
+
+        let items = agent_rules
+            .order_by((priority.desc(), created_at.desc()))
+            .load::<AgentRule>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn list_active(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<AgentRule>> {
+        use crate::schema::agent_rules::dsl::*;
+
+        let items = agent_rules
+            .filter(is_active.eq(true))
+            .order_by((priority.desc(), created_at.desc()))
+            .load::<AgentRule>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn list_by_source_type(
+        conn: &mut AsyncPgConnection,
+        source: &str,
+    ) -> anyhow::Result<Vec<AgentRule>> {
+        use crate::schema::agent_rules::dsl::*;
+
+        let items = agent_rules
+            .filter(source_type.eq(source).or(source_type.eq("any")))
+            .filter(is_active.eq(true))
+            .order_by((priority.desc(), created_at.desc()))
+            .load::<AgentRule>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn get_by_id(
+        conn: &mut AsyncPgConnection,
+        rule_id: Uuid,
+    ) -> anyhow::Result<AgentRule> {
+        use crate::schema::agent_rules::dsl::*;
+
+        let rule = agent_rules
+            .filter(id.eq(rule_id))
+            .first::<AgentRule>(conn)
+            .await?;
+
+        Ok(rule)
+    }
+
+    pub async fn create(
+        conn: &mut AsyncPgConnection,
+        request: &CreateAgentRuleRequest,
+    ) -> anyhow::Result<AgentRule> {
+        use crate::schema::agent_rules::dsl::*;
+
+        let conditions_json = serde_json::to_string(&request.conditions)?;
+        let action_params_json = request
+            .action_params
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+
+        let new_rule = diesel::insert_into(agent_rules)
+            .values((
+                name.eq(&request.name),
+                description.eq(&request.description),
+                source_type.eq(&request.source_type),
+                rule_type.eq(&request.rule_type),
+                conditions.eq(&conditions_json),
+                action.eq(&request.action),
+                action_params.eq(&action_params_json),
+                priority.eq(request.priority.unwrap_or(0)),
+                is_active.eq(request.is_active.unwrap_or(true)),
+                created_from_decision_id.eq(&request.created_from_decision_id),
+            ))
+            .get_result::<AgentRule>(conn)
+            .await?;
+
+        Ok(new_rule)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        conn: &mut AsyncPgConnection,
+        rule_id: Uuid,
+        name_val: Option<&str>,
+        description_val: Option<&str>,
+        source_type_val: Option<&str>,
+        rule_type_val: Option<&str>,
+        conditions_val: Option<&RuleConditions>,
+        action_val: Option<&str>,
+        action_params_val: Option<&RuleActionParams>,
+        priority_val: Option<i32>,
+        is_active_val: Option<bool>,
+    ) -> anyhow::Result<AgentRule> {
+        use crate::schema::agent_rules::dsl::*;
+
+        if let Some(n) = name_val {
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(name.eq(n))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(d) = description_val {
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(description.eq(Some(d)))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(st) = source_type_val {
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(source_type.eq(st))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(rt) = rule_type_val {
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(rule_type.eq(rt))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(c) = conditions_val {
+            let conditions_json = serde_json::to_string(c)?;
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(conditions.eq(conditions_json))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(a) = action_val {
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(action.eq(a))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(ap) = action_params_val {
+            let action_params_json = serde_json::to_string(ap)?;
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(action_params.eq(Some(action_params_json)))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(p) = priority_val {
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(priority.eq(p))
+                .execute(conn)
+                .await?;
+        }
+        if let Some(active) = is_active_val {
+            diesel::update(agent_rules.filter(id.eq(rule_id)))
+                .set(is_active.eq(active))
+                .execute(conn)
+                .await?;
+        }
+
+        // Always update updated_at
+        diesel::update(agent_rules.filter(id.eq(rule_id)))
+            .set(updated_at.eq(Utc::now()))
+            .execute(conn)
+            .await?;
+
+        get_by_id(conn, rule_id).await
+    }
+
+    pub async fn delete(conn: &mut AsyncPgConnection, rule_id: Uuid) -> anyhow::Result<()> {
+        use crate::schema::agent_rules::dsl::*;
+
+        diesel::delete(agent_rules.filter(id.eq(rule_id)))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn increment_match_count(
+        conn: &mut AsyncPgConnection,
+        rule_id: Uuid,
+    ) -> anyhow::Result<AgentRule> {
+        use crate::schema::agent_rules::dsl::*;
+
+        let updated = diesel::update(agent_rules.filter(id.eq(rule_id)))
+            .set((
+                match_count.eq(match_count + 1),
+                last_matched_at.eq(Some(Utc::now())),
+            ))
+            .get_result::<AgentRule>(conn)
+            .await?;
+
+        Ok(updated)
+    }
+
+    pub async fn set_active(
+        conn: &mut AsyncPgConnection,
+        rule_id: Uuid,
+        active: bool,
+    ) -> anyhow::Result<AgentRule> {
+        use crate::schema::agent_rules::dsl::*;
+
+        let updated = diesel::update(agent_rules.filter(id.eq(rule_id)))
+            .set((is_active.eq(active), updated_at.eq(Utc::now())))
+            .get_result::<AgentRule>(conn)
+            .await?;
+
+        Ok(updated)
     }
 }

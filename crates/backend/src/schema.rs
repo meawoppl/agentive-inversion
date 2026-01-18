@@ -1,6 +1,16 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    chat_messages (id) {
+        id -> Uuid,
+        role -> Varchar,
+        content -> Text,
+        intent -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     agent_rules (id) {
         id -> Uuid,
         name -> Varchar,
@@ -130,6 +140,7 @@ diesel::joinable!(emails -> email_accounts (account_id));
 diesel::joinable!(todos -> categories (category_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    chat_messages,
     agent_rules,
     agent_decisions,
     calendar_accounts,

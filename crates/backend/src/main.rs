@@ -83,6 +83,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/rules/:id/toggle",
             post(handlers::toggle_agent_rule_active),
         )
+        // Chat routes
+        .route("/api/chat", post(handlers::send_chat_message))
+        .route("/api/chat/history", get(handlers::get_chat_history))
+        .route("/api/chat/history", delete(handlers::clear_chat_history))
         .layer(build_cors_layer())
         .with_state(pool);
 

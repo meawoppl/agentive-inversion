@@ -9,8 +9,13 @@ use uuid::Uuid;
 use web_sys::{Element, HtmlInputElement};
 use yew::prelude::*;
 
-#[derive(Clone, PartialEq)]
-enum View {
+// ============================================================================
+// App State Context
+// ============================================================================
+
+/// View/tab options for the application
+#[derive(Clone, PartialEq, Copy)]
+pub enum View {
     Inbox,
     Todos,
     Calendar,
@@ -18,12 +23,51 @@ enum View {
     Categories,
 }
 
-#[function_component(App)]
-fn app() -> Html {
+/// Shared application state accessible via context
+#[derive(Clone, PartialEq)]
+pub struct AppState {
+    pub current_view: View,
+    pub pending_decisions_count: i64,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            current_view: View::Inbox,
+            pending_decisions_count: 0,
+        }
+    }
+}
+
+/// Context value providing both state and setter
+#[derive(Clone, PartialEq)]
+pub struct AppContext {
+    pub state: AppState,
+    pub set_view: Callback<View>,
+    pub set_pending_count: Callback<i64>,
+    pub refresh_pending_count: Callback<()>,
+}
+
+/// Hook to access app context
+#[hook]
+pub fn use_app_context() -> AppContext {
+    use_context::<AppContext>()
+        .expect("AppContext not found - wrap component in AppContextProvider")
+}
+
+/// Provider component that wraps children with app state context
+#[derive(Properties, PartialEq)]
+pub struct AppContextProviderProps {
+    #[prop_or_default]
+    pub children: Html,
+}
+
+#[function_component(AppContextProvider)]
+pub fn app_context_provider(props: &AppContextProviderProps) -> Html {
     let current_view = use_state(|| View::Inbox);
     let pending_count = use_state(|| 0i64);
 
-    // Fetch decision stats for pending count
+    // Fetch initial pending count
     {
         let pending_count = pending_count.clone();
         use_effect_with((), move |_| {
@@ -40,29 +84,88 @@ fn app() -> Html {
         });
     }
 
-    let set_view_inbox = {
+    let set_view = {
         let current_view = current_view.clone();
-        Callback::from(move |_| current_view.set(View::Inbox))
+        Callback::from(move |view: View| current_view.set(view))
+    };
+
+    let set_pending_count = {
+        let pending_count = pending_count.clone();
+        Callback::from(move |count: i64| pending_count.set(count))
+    };
+
+    let refresh_pending_count = {
+        let pending_count = pending_count.clone();
+        Callback::from(move |_: ()| {
+            let pending_count = pending_count.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(response) = Request::get("/api/decisions/stats").send().await {
+                    if response.ok() {
+                        if let Ok(stats) = response.json::<DecisionStats>().await {
+                            pending_count.set(stats.pending);
+                        }
+                    }
+                }
+            });
+        })
+    };
+
+    let context = AppContext {
+        state: AppState {
+            current_view: *current_view,
+            pending_decisions_count: *pending_count,
+        },
+        set_view,
+        set_pending_count,
+        refresh_pending_count,
+    };
+
+    html! {
+        <ContextProvider<AppContext> context={context}>
+            { props.children.clone() }
+        </ContextProvider<AppContext>>
+    }
+}
+
+#[function_component(App)]
+fn app() -> Html {
+    html! {
+        <AppContextProvider>
+            <AppContent />
+        </AppContextProvider>
+    }
+}
+
+/// Inner app content that uses the context
+#[function_component(AppContent)]
+fn app_content() -> Html {
+    let ctx = use_app_context();
+    let current_view = ctx.state.current_view;
+    let pending_count = ctx.state.pending_decisions_count;
+
+    let set_view_inbox = {
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::Inbox))
     };
 
     let set_view_todos = {
-        let current_view = current_view.clone();
-        Callback::from(move |_| current_view.set(View::Todos))
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::Todos))
     };
 
     let set_view_log = {
-        let current_view = current_view.clone();
-        Callback::from(move |_| current_view.set(View::DecisionLog))
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::DecisionLog))
     };
 
     let set_view_categories = {
-        let current_view = current_view.clone();
-        Callback::from(move |_| current_view.set(View::Categories))
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::Categories))
     };
 
     let set_view_calendar = {
-        let current_view = current_view.clone();
-        Callback::from(move |_| current_view.set(View::Calendar))
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::Calendar))
     };
 
     html! {
@@ -71,36 +174,36 @@ fn app() -> Html {
                 <h1>{"Agentive Inversion"}</h1>
                 <nav class="main-nav">
                     <button
-                        class={if *current_view == View::Inbox { "nav-btn active" } else { "nav-btn" }}
+                        class={if current_view == View::Inbox { "nav-btn active" } else { "nav-btn" }}
                         onclick={set_view_inbox}
                     >
                         {"Inbox"}
-                        {if *pending_count > 0 {
-                            html! { <span class="nav-badge">{*pending_count}</span> }
+                        {if pending_count > 0 {
+                            html! { <span class="nav-badge">{pending_count}</span> }
                         } else {
                             html! {}
                         }}
                     </button>
                     <button
-                        class={if *current_view == View::Todos { "nav-btn active" } else { "nav-btn" }}
+                        class={if current_view == View::Todos { "nav-btn active" } else { "nav-btn" }}
                         onclick={set_view_todos}
                     >
                         {"Todos"}
                     </button>
                     <button
-                        class={if *current_view == View::Calendar { "nav-btn active" } else { "nav-btn" }}
+                        class={if current_view == View::Calendar { "nav-btn active" } else { "nav-btn" }}
                         onclick={set_view_calendar}
                     >
                         {"Calendar"}
                     </button>
                     <button
-                        class={if *current_view == View::DecisionLog { "nav-btn active" } else { "nav-btn" }}
+                        class={if current_view == View::DecisionLog { "nav-btn active" } else { "nav-btn" }}
                         onclick={set_view_log}
                     >
                         {"Decision Log"}
                     </button>
                     <button
-                        class={if *current_view == View::Categories { "nav-btn active" } else { "nav-btn" }}
+                        class={if current_view == View::Categories { "nav-btn active" } else { "nav-btn" }}
                         onclick={set_view_categories}
                     >
                         {"Categories"}
@@ -108,7 +211,7 @@ fn app() -> Html {
                 </nav>
             </header>
             <main>
-                {match &*current_view {
+                {match current_view {
                     View::Inbox => html! { <DecisionInbox /> },
                     View::Todos => html! { <TodoList /> },
                     View::Calendar => html! { <CalendarView /> },
@@ -127,6 +230,7 @@ fn app() -> Html {
 
 #[function_component(DecisionInbox)]
 fn decision_inbox() -> Html {
+    let ctx = use_app_context();
     let decisions = use_state(Vec::<AgentDecisionResponse>::new);
     let emails = use_state(std::collections::HashMap::<Uuid, EmailResponse>::new);
     let loading = use_state(|| true);
@@ -201,9 +305,11 @@ fn decision_inbox() -> Html {
     let on_approve = {
         let refresh_trigger = refresh_trigger.clone();
         let selected_decision = selected_decision.clone();
+        let refresh_pending = ctx.refresh_pending_count.clone();
         Callback::from(move |id: Uuid| {
             let refresh_trigger = refresh_trigger.clone();
             let selected_decision = selected_decision.clone();
+            let refresh_pending = refresh_pending.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let request = ApproveDecisionRequest {
                     modifications: None,
@@ -220,6 +326,7 @@ fn decision_inbox() -> Html {
                     if response.ok() {
                         selected_decision.set(None);
                         refresh_trigger.set(*refresh_trigger + 1);
+                        refresh_pending.emit(());
                     }
                 }
             });
@@ -229,9 +336,11 @@ fn decision_inbox() -> Html {
     let on_reject = {
         let refresh_trigger = refresh_trigger.clone();
         let selected_decision = selected_decision.clone();
+        let refresh_pending = ctx.refresh_pending_count.clone();
         Callback::from(move |(id, feedback): (Uuid, Option<String>)| {
             let refresh_trigger = refresh_trigger.clone();
             let selected_decision = selected_decision.clone();
+            let refresh_pending = refresh_pending.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let request = RejectDecisionRequest {
                     feedback,
@@ -248,6 +357,7 @@ fn decision_inbox() -> Html {
                     if response.ok() {
                         selected_decision.set(None);
                         refresh_trigger.set(*refresh_trigger + 1);
+                        refresh_pending.emit(());
                     }
                 }
             });
@@ -257,6 +367,7 @@ fn decision_inbox() -> Html {
     let on_batch_approve = {
         let selected_decisions = selected_decisions.clone();
         let refresh_trigger = refresh_trigger.clone();
+        let refresh_pending = ctx.refresh_pending_count.clone();
         Callback::from(move |_| {
             let ids: Vec<Uuid> = selected_decisions.iter().copied().collect();
             if ids.is_empty() {
@@ -264,6 +375,7 @@ fn decision_inbox() -> Html {
             }
             let selected_decisions = selected_decisions.clone();
             let refresh_trigger = refresh_trigger.clone();
+            let refresh_pending = refresh_pending.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let request = BatchApproveDecisionsRequest { decision_ids: ids };
                 if let Ok(response) = Request::post("/api/decisions/batch/approve")
@@ -276,6 +388,7 @@ fn decision_inbox() -> Html {
                     if response.ok() {
                         selected_decisions.set(std::collections::HashSet::new());
                         refresh_trigger.set(*refresh_trigger + 1);
+                        refresh_pending.emit(());
                     }
                 }
             });
@@ -285,6 +398,7 @@ fn decision_inbox() -> Html {
     let on_batch_reject = {
         let selected_decisions = selected_decisions.clone();
         let refresh_trigger = refresh_trigger.clone();
+        let refresh_pending = ctx.refresh_pending_count.clone();
         Callback::from(move |_| {
             let ids: Vec<Uuid> = selected_decisions.iter().copied().collect();
             if ids.is_empty() {
@@ -292,6 +406,7 @@ fn decision_inbox() -> Html {
             }
             let selected_decisions = selected_decisions.clone();
             let refresh_trigger = refresh_trigger.clone();
+            let refresh_pending = refresh_pending.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let request = BatchRejectDecisionsRequest {
                     decision_ids: ids,
@@ -307,6 +422,7 @@ fn decision_inbox() -> Html {
                     if response.ok() {
                         selected_decisions.set(std::collections::HashSet::new());
                         refresh_trigger.set(*refresh_trigger + 1);
+                        refresh_pending.emit(());
                     }
                 }
             });

@@ -58,5 +58,6 @@ pub fn process_email_to_todo(email: &EmailMessage) -> Option<Todo> {
         updated_at: now,
         link: None,
         category_id: None,
+        decision_id: None, // Will be set when created via agent decision flow
     })
 }

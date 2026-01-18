@@ -5,13 +5,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use shared_types::{
-    Category, ConnectEmailAccountRequest, CreateCategoryRequest, CreateTodoRequest,
-    EmailAccountResponse, EmailListQuery, EmailResponse, Todo, UpdateCategoryRequest,
-    UpdateTodoRequest,
+    AgentDecisionResponse, ApproveDecisionRequest, Category, ConnectEmailAccountRequest,
+    CreateAgentDecisionRequest, CreateCategoryRequest, CreateTodoRequest, DecisionStats,
+    EmailAccountResponse, EmailListQuery, EmailResponse, ProposedTodoAction, RejectDecisionRequest,
+    Todo, UpdateCategoryRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 
-use crate::db::{categories, email_accounts, emails, todos, DbPool};
+use crate::db::{categories, decisions, email_accounts, emails, todos, DbPool};
 
 // Todo handlers
 pub async fn list_todos(State(pool): State<DbPool>) -> Result<Json<Vec<Todo>>, StatusCode> {
@@ -488,4 +489,206 @@ pub async fn get_email_stats(
     })?;
 
     Ok(Json(EmailStatsResponse { total, unprocessed }))
+}
+
+// ============================================================================
+// Agent Decision handlers
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct DecisionListParams {
+    pub status: Option<String>,
+    pub source_type: Option<String>,
+}
+
+pub async fn list_decisions(
+    State(pool): State<DbPool>,
+    Query(params): Query<DecisionListParams>,
+) -> Result<Json<Vec<AgentDecisionResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let items = if let Some(status) = params.status {
+        decisions::list_by_status(&mut conn, &status).await
+    } else if let Some(source_type) = params.source_type {
+        decisions::list_by_source(&mut conn, &source_type).await
+    } else {
+        decisions::list_all(&mut conn).await
+    }
+    .map_err(|e| {
+        tracing::error!("Failed to list decisions: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let responses: Vec<AgentDecisionResponse> = items.into_iter().map(Into::into).collect();
+    Ok(Json(responses))
+}
+
+pub async fn list_pending_decisions(
+    State(pool): State<DbPool>,
+) -> Result<Json<Vec<AgentDecisionResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let items = decisions::list_pending(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to list pending decisions: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let responses: Vec<AgentDecisionResponse> = items.into_iter().map(Into::into).collect();
+    Ok(Json(responses))
+}
+
+pub async fn get_decision(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AgentDecisionResponse>, StatusCode> {
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let decision = decisions::get_by_id(&mut conn, id).await.map_err(|e| {
+        tracing::error!("Failed to get decision: {:?}", e);
+        StatusCode::NOT_FOUND
+    })?;
+
+    Ok(Json(decision.into()))
+}
+
+pub async fn create_decision(
+    State(pool): State<DbPool>,
+    Json(payload): Json<CreateAgentDecisionRequest>,
+) -> Result<Json<AgentDecisionResponse>, StatusCode> {
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let decision = decisions::create(
+        &mut conn,
+        &payload.source_type,
+        payload.source_id,
+        payload.source_external_id.as_deref(),
+        &payload.decision_type,
+        payload.proposed_action,
+        &payload.reasoning,
+        payload.reasoning_details,
+        payload.confidence,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create decision: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(decision.into()))
+}
+
+pub async fn approve_decision(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<ApproveDecisionRequest>,
+) -> Result<Json<AgentDecisionResponse>, StatusCode> {
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Get the decision first
+    let decision = decisions::get_by_id(&mut conn, id).await.map_err(|e| {
+        tracing::error!("Failed to get decision: {:?}", e);
+        StatusCode::NOT_FOUND
+    })?;
+
+    // If decision type is create_todo, create the todo
+    let todo_id = if decision.decision_type == "create_todo" {
+        // Use modifications if provided, otherwise use proposed_action
+        let action: ProposedTodoAction = if let Some(mods) = payload.modifications {
+            mods
+        } else {
+            serde_json::from_str(&decision.proposed_action).map_err(|e| {
+                tracing::error!("Failed to parse proposed_action: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+        };
+
+        let todo = todos::create(
+            &mut conn,
+            &action.todo_title,
+            action.todo_description.as_deref(),
+            action.due_date,
+            None, // link
+            action.category_id,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create todo from decision: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        Some(todo.id)
+    } else {
+        None
+    };
+
+    // Update the decision status
+    let updated = decisions::approve(&mut conn, id, todo_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to approve decision: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Mark as executed since we've already created the todo
+    let final_decision = if todo_id.is_some() {
+        decisions::mark_executed(&mut conn, id).await.map_err(|e| {
+            tracing::error!("Failed to mark decision as executed: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    } else {
+        updated
+    };
+
+    Ok(Json(final_decision.into()))
+}
+
+pub async fn reject_decision(
+    State(pool): State<DbPool>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<RejectDecisionRequest>,
+) -> Result<Json<AgentDecisionResponse>, StatusCode> {
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let decision = decisions::reject(&mut conn, id, payload.feedback.as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to reject decision: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(decision.into()))
+}
+
+pub async fn get_decision_stats(
+    State(pool): State<DbPool>,
+) -> Result<Json<DecisionStats>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let stats = decisions::get_stats(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to get decision stats: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(stats))
 }

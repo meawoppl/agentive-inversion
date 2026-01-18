@@ -8,6 +8,7 @@ use tower_http::cors::CorsLayer;
 
 mod db;
 mod handlers;
+mod models;
 mod schema;
 
 #[tokio::main]
@@ -47,6 +48,20 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/emails", get(handlers::list_emails))
         .route("/api/emails/stats", get(handlers::get_email_stats))
         .route("/api/emails/:id", get(handlers::get_email))
+        // Agent decision routes
+        .route("/api/decisions", get(handlers::list_decisions))
+        .route("/api/decisions", post(handlers::create_decision))
+        .route(
+            "/api/decisions/pending",
+            get(handlers::list_pending_decisions),
+        )
+        .route("/api/decisions/stats", get(handlers::get_decision_stats))
+        .route("/api/decisions/:id", get(handlers::get_decision))
+        .route(
+            "/api/decisions/:id/approve",
+            post(handlers::approve_decision),
+        )
+        .route("/api/decisions/:id/reject", post(handlers::reject_decision))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

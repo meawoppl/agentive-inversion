@@ -4,7 +4,9 @@ use diesel_async::{
     pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager, ManagerConfig},
     AsyncPgConnection, RunQueryDsl,
 };
-use shared_types::{AgentDecision, AgentRule, Category, ChatMessage, EmailAccount, Todo};
+use shared_types::{
+    AgentDecision, AgentRule, Category, ChatMessage, DecisionStatus, EmailAccount, SyncStatus, Todo,
+};
 use uuid::Uuid;
 
 use crate::models::{AgentDecisionRow, AgentRuleChanges, NewEmail, TodoChanges};
@@ -123,7 +125,7 @@ pub mod email_accounts {
                 account_name.eq(account_name_val),
                 email_address.eq(email_addr),
                 provider.eq(provider_val),
-                sync_status.eq("pending"),
+                sync_status.eq(SyncStatus::Pending.as_str()),
                 is_active.eq(true),
             ))
             .get_result::<EmailAccount>(conn)
@@ -146,7 +148,7 @@ pub mod email_accounts {
                 oauth_refresh_token.eq(Some(refresh_token)),
                 oauth_access_token.eq(Some(access_token)),
                 oauth_token_expires_at.eq(Some(expires_at)),
-                sync_status.eq("pending"),
+                sync_status.eq(SyncStatus::Pending.as_str()),
             ))
             .get_result::<EmailAccount>(conn)
             .await?;
@@ -210,7 +212,7 @@ pub mod email_accounts {
 
         diesel::update(email_accounts.filter(id.eq(account_id)))
             .set((
-                sync_status.eq("error"),
+                sync_status.eq(SyncStatus::Failed.as_str()),
                 last_sync_error.eq(Some(error)),
                 last_synced.eq(Some(Utc::now())),
             ))
@@ -579,7 +581,7 @@ pub mod decisions {
         use crate::schema::agent_decisions::dsl::*;
 
         let rows = agent_decisions
-            .filter(status.eq("proposed"))
+            .filter(status.eq(DecisionStatus::Proposed.as_str()))
             .order_by(created_at.desc())
             .load::<AgentDecisionRow>(conn)
             .await?;
@@ -661,7 +663,7 @@ pub mod decisions {
                 reasoning.eq(reasoning_val),
                 reasoning_details.eq(reasoning_details_str),
                 confidence.eq(confidence_val),
-                status.eq("proposed"),
+                status.eq(DecisionStatus::Proposed.as_str()),
             ))
             .get_result::<AgentDecisionRow>(conn)
             .await?;
@@ -678,7 +680,7 @@ pub mod decisions {
 
         let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
             .set((
-                status.eq("approved"),
+                status.eq(DecisionStatus::Approved.as_str()),
                 result_todo_id.eq(todo_id),
                 reviewed_at.eq(Some(Utc::now())),
             ))
@@ -697,7 +699,7 @@ pub mod decisions {
 
         let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
             .set((
-                status.eq("rejected"),
+                status.eq(DecisionStatus::Rejected.as_str()),
                 user_feedback.eq(feedback),
                 reviewed_at.eq(Some(Utc::now())),
             ))
@@ -714,7 +716,10 @@ pub mod decisions {
         use crate::schema::agent_decisions::dsl::*;
 
         let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
-            .set((status.eq("executed"), executed_at.eq(Some(Utc::now()))))
+            .set((
+                status.eq(DecisionStatus::Executed.as_str()),
+                executed_at.eq(Some(Utc::now())),
+            ))
             .get_result::<AgentDecisionRow>(conn)
             .await?;
 
@@ -730,7 +735,7 @@ pub mod decisions {
 
         let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
             .set((
-                status.eq("failed"),
+                status.eq(DecisionStatus::Failed.as_str()),
                 user_feedback.eq(Some(error_msg)),
                 executed_at.eq(Some(Utc::now())),
             ))
@@ -749,7 +754,7 @@ pub mod decisions {
 
         let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
             .set((
-                status.eq("auto_approved"),
+                status.eq(DecisionStatus::AutoApproved.as_str()),
                 applied_rule_id.eq(Some(rule_id)),
                 reviewed_at.eq(Some(Utc::now())),
             ))
@@ -768,25 +773,29 @@ pub mod decisions {
         let total: i64 = agent_decisions.select(count_star()).first(conn).await?;
 
         let pending_count: i64 = agent_decisions
-            .filter(status.eq("proposed"))
+            .filter(status.eq(DecisionStatus::Proposed.as_str()))
             .select(count_star())
             .first(conn)
             .await?;
 
         let approved_count: i64 = agent_decisions
-            .filter(status.eq("approved").or(status.eq("executed")))
+            .filter(
+                status
+                    .eq(DecisionStatus::Approved.as_str())
+                    .or(status.eq(DecisionStatus::Executed.as_str())),
+            )
             .select(count_star())
             .first(conn)
             .await?;
 
         let rejected_count: i64 = agent_decisions
-            .filter(status.eq("rejected"))
+            .filter(status.eq(DecisionStatus::Rejected.as_str()))
             .select(count_star())
             .first(conn)
             .await?;
 
         let auto_approved_count: i64 = agent_decisions
-            .filter(status.eq("auto_approved"))
+            .filter(status.eq(DecisionStatus::AutoApproved.as_str()))
             .select(count_star())
             .first(conn)
             .await?;
@@ -1415,7 +1424,7 @@ pub mod calendar_accounts {
                 account_name.eq(account_name_val),
                 calendar_id.eq(calendar_id_val),
                 email_address.eq(email_address_val),
-                sync_status.eq("pending"),
+                sync_status.eq(SyncStatus::Pending.as_str()),
                 is_active.eq(true),
             ))
             .get_result::<CalendarAccount>(conn)

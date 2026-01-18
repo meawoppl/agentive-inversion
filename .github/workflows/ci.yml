@@ -53,8 +53,14 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Cache diesel_cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/diesel
+          key: ${{ runner.os }}-diesel-cli
+
       - name: Install diesel_cli
-        run: cargo install diesel_cli --no-default-features --features postgres
+        run: command -v diesel || cargo install diesel_cli --no-default-features --features postgres
 
       - name: Run migrations
         env:
@@ -84,6 +90,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-clippy-target-${{ hashFiles('**/Cargo.lock') }}
+
       - run: cargo clippy --workspace --all-features -- -D warnings
 
   frontend-build:
@@ -97,8 +122,32 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-frontend-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache trunk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/trunk
+          key: ${{ runner.os }}-trunk-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Install Trunk
-        run: cargo install trunk
+        run: command -v trunk || cargo install trunk
 
       - name: Build frontend
         run: cd crates/frontend && trunk build --release

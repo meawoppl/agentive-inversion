@@ -20,31 +20,20 @@ use crate::db::{
     agent_rules, calendar_accounts, calendar_events, categories, chat_messages, decisions,
     email_accounts, emails, todos, DbPool,
 };
+use crate::error::ApiResult;
 
 // Todo handlers
-pub async fn list_todos(State(pool): State<DbPool>) -> Result<Json<Vec<Todo>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let items = todos::list_all(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to list todos: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+pub async fn list_todos(State(pool): State<DbPool>) -> ApiResult<Json<Vec<Todo>>> {
+    let mut conn = pool.get().await?;
+    let items = todos::list_all(&mut conn).await?;
     Ok(Json(items))
 }
 
 pub async fn create_todo(
     State(pool): State<DbPool>,
     Json(payload): Json<CreateTodoRequest>,
-) -> Result<Json<Todo>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<Json<Todo>> {
+    let mut conn = pool.get().await?;
     let todo = todos::create(
         &mut conn,
         &payload.title,
@@ -53,9 +42,7 @@ pub async fn create_todo(
         payload.link.as_deref(),
         payload.category_id,
     )
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+    .await?;
     Ok(Json(todo))
 }
 
@@ -63,12 +50,8 @@ pub async fn update_todo(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateTodoRequest>,
-) -> Result<Json<Todo>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<Json<Todo>> {
+    let mut conn = pool.get().await?;
     let todo = todos::update(
         &mut conn,
         id,
@@ -79,25 +62,16 @@ pub async fn update_todo(
         payload.link.as_deref(),
         payload.category_id,
     )
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+    .await?;
     Ok(Json(todo))
 }
 
 pub async fn delete_todo(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    todos::delete(&mut conn, id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<StatusCode> {
+    let mut conn = pool.get().await?;
+    todos::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -323,35 +297,18 @@ pub async fn gmail_oauth_callback(
 }
 
 // Category handlers
-pub async fn list_categories(
-    State(pool): State<DbPool>,
-) -> Result<Json<Vec<Category>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let items = categories::list_all(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to list categories: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+pub async fn list_categories(State(pool): State<DbPool>) -> ApiResult<Json<Vec<Category>>> {
+    let mut conn = pool.get().await?;
+    let items = categories::list_all(&mut conn).await?;
     Ok(Json(items))
 }
 
 pub async fn create_category(
     State(pool): State<DbPool>,
     Json(payload): Json<CreateCategoryRequest>,
-) -> Result<Json<Category>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let category = categories::create(&mut conn, &payload.name, payload.color.as_deref())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<Json<Category>> {
+    let mut conn = pool.get().await?;
+    let category = categories::create(&mut conn, &payload.name, payload.color.as_deref()).await?;
     Ok(Json(category))
 }
 
@@ -359,37 +316,24 @@ pub async fn update_category(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateCategoryRequest>,
-) -> Result<Json<Category>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<Json<Category>> {
+    let mut conn = pool.get().await?;
     let category = categories::update(
         &mut conn,
         id,
         payload.name.as_deref(),
         payload.color.as_deref(),
     )
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+    .await?;
     Ok(Json(category))
 }
 
 pub async fn delete_category(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    categories::delete(&mut conn, id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<StatusCode> {
+    let mut conn = pool.get().await?;
+    categories::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

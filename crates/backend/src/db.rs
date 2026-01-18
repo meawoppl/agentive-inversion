@@ -1162,6 +1162,7 @@ pub mod calendar_events {
         Ok(items)
     }
 
+    #[allow(dead_code)] // Used by calendar-poller
     pub async fn get_unprocessed(
         conn: &mut AsyncPgConnection,
     ) -> anyhow::Result<Vec<CalendarEvent>> {
@@ -1176,6 +1177,7 @@ pub mod calendar_events {
         Ok(items)
     }
 
+    #[allow(dead_code)] // Used by calendar-poller
     pub async fn mark_processed(
         conn: &mut AsyncPgConnection,
         event_id: Uuid,
@@ -1190,6 +1192,7 @@ pub mod calendar_events {
         Ok(())
     }
 
+    #[allow(dead_code)] // Used by calendar-poller
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert(
         conn: &mut AsyncPgConnection,
@@ -1308,6 +1311,7 @@ pub mod calendar_accounts {
         Ok(account)
     }
 
+    #[allow(dead_code)] // Used by calendar-poller
     pub async fn get_active(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<CalendarAccount>> {
         use crate::schema::calendar_accounts::dsl::*;
 
@@ -1342,6 +1346,7 @@ pub mod calendar_accounts {
         Ok(new_account)
     }
 
+    #[allow(dead_code)] // Used by calendar-poller
     pub async fn update_oauth_tokens(
         conn: &mut AsyncPgConnection,
         account_id: Uuid,
@@ -1364,6 +1369,7 @@ pub mod calendar_accounts {
         Ok(())
     }
 
+    #[allow(dead_code)] // Used by calendar-poller
     pub async fn update_sync_status(
         conn: &mut AsyncPgConnection,
         account_id: Uuid,

@@ -50,6 +50,14 @@ pub enum ApiError {
     /// Environment variable missing
     #[error("Configuration error: {0}")]
     Config(String),
+
+    /// Authentication required but not provided or invalid
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
+    /// Authenticated but not permitted to access resource
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
 }
 
 impl ApiError {
@@ -131,6 +139,8 @@ impl IntoResponse for ApiError {
                     None,
                 )
             }
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone(), None),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone(), None),
         };
 
         let body = Json(ErrorResponse {

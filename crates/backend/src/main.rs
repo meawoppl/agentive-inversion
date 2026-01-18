@@ -28,9 +28,15 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::establish_connection_pool()?;
 
     // Start email polling background task
-    let poll_pool = pool.clone();
+    let email_poll_pool = pool.clone();
     tokio::spawn(async move {
-        pollers::start_email_polling_task(poll_pool).await;
+        pollers::start_email_polling_task(email_poll_pool).await;
+    });
+
+    // Start calendar polling background task (stub - not yet implemented)
+    let calendar_poll_pool = pool.clone();
+    tokio::spawn(async move {
+        pollers::start_calendar_polling_task(calendar_poll_pool).await;
     });
 
     let app = Router::new()

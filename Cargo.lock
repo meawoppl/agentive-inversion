@@ -211,12 +211,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "diesel",
  "diesel-async",
  "dotenvy",
  "futures",
+ "google-gmail1",
+ "hyper 1.8.1",
+ "hyper-util",
+ "regex",
  "reqwest",
  "rustls 0.23.35",
  "serde",
@@ -234,6 +239,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "webpki-roots",
+ "yup-oauth2 12.1.1",
 ]
 
 [[package]]

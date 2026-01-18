@@ -49,3 +49,24 @@ impl From<AgentDecisionRow> for shared_types::AgentDecision {
         }
     }
 }
+
+/// Insertable struct for new emails
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = crate::schema::emails)]
+pub struct NewEmail {
+    pub account_id: Uuid,
+    pub gmail_id: String,
+    pub thread_id: String,
+    pub history_id: Option<i64>,
+    pub subject: String,
+    pub from_address: String,
+    pub from_name: Option<String>,
+    pub to_addresses: Vec<Option<String>>,
+    pub cc_addresses: Option<Vec<Option<String>>>,
+    pub snippet: Option<String>,
+    pub body_text: Option<String>,
+    pub body_html: Option<String>,
+    pub labels: Option<Vec<Option<String>>>,
+    pub has_attachments: bool,
+    pub received_at: DateTime<Utc>,
+}

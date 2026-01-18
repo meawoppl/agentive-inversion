@@ -1,6 +1,8 @@
 //! Decision approval and execution service.
 //!
-//! Extracts business logic from HTTP handlers for better testability and reuse.
+//! This module extracts business logic from HTTP handlers for better
+//! testability and reuse. It provides a centralized place for decision
+//! approval/rejection logic.
 
 use crate::db::{decisions, todos, DbPool};
 use anyhow::{Context, Result};

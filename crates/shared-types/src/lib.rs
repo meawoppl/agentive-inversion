@@ -156,13 +156,116 @@ pub struct OAuthCallbackRequest {
     pub state: String,
 }
 
+/// Calendar account with OAuth fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
 pub struct CalendarAccount {
     pub id: Uuid,
     pub account_name: String,
     pub calendar_id: String,
     pub last_synced: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub email_address: Option<String>,
+    pub oauth_refresh_token: Option<String>,
+    pub oauth_access_token: Option<String>,
+    pub oauth_token_expires_at: Option<DateTime<Utc>>,
+    pub sync_token: Option<String>,
+    pub sync_status: String,
+    pub last_sync_error: Option<String>,
+    pub is_active: bool,
+}
+
+/// Calendar event from Google Calendar
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
+pub struct CalendarEvent {
+    pub id: Uuid,
+    pub account_id: Uuid,
+    pub google_event_id: String,
+    pub ical_uid: Option<String>,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+    pub all_day: bool,
+    pub recurring: bool,
+    pub recurrence_rule: Option<String>,
+    pub status: String,
+    pub organizer_email: Option<String>,
+    pub attendees: Option<String>, // JSON array stored as text
+    pub conference_link: Option<String>,
+    pub fetched_at: DateTime<Utc>,
+    pub processed: bool,
+    pub processed_at: Option<DateTime<Utc>>,
+}
+
+/// API response for calendar events
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalendarEventResponse {
+    pub id: Uuid,
+    pub account_id: Uuid,
+    pub google_event_id: String,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+    pub all_day: bool,
+    pub recurring: bool,
+    pub status: String,
+    pub organizer_email: Option<String>,
+    pub attendees: Vec<CalendarAttendee>,
+    pub conference_link: Option<String>,
+    pub processed: bool,
+}
+
+/// Calendar event attendee
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalendarAttendee {
+    pub email: String,
+    pub display_name: Option<String>,
+    pub response_status: Option<String>, // accepted, declined, tentative, needsAction
+    pub organizer: bool,
+    pub self_: bool,
+}
+
+impl From<CalendarEvent> for CalendarEventResponse {
+    fn from(event: CalendarEvent) -> Self {
+        let attendees: Vec<CalendarAttendee> = event
+            .attendees
+            .as_ref()
+            .and_then(|a| serde_json::from_str(a).ok())
+            .unwrap_or_default();
+
+        CalendarEventResponse {
+            id: event.id,
+            account_id: event.account_id,
+            google_event_id: event.google_event_id,
+            summary: event.summary,
+            description: event.description,
+            location: event.location,
+            start_time: event.start_time,
+            end_time: event.end_time,
+            all_day: event.all_day,
+            recurring: event.recurring,
+            status: event.status,
+            organizer_email: event.organizer_email,
+            attendees,
+            conference_link: event.conference_link,
+            processed: event.processed,
+        }
+    }
+}
+
+/// Query parameters for calendar events
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CalendarEventQuery {
+    pub account_id: Option<Uuid>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub processed: Option<bool>,
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

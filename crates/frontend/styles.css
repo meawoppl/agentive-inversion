@@ -1186,3 +1186,235 @@ main {
         right: -12px;
     }
 }
+
+/* ============================================================================
+   Calendar View Styles
+   ============================================================================ */
+
+.calendar-view h2 {
+    margin-bottom: 16px;
+    color: #2c3e50;
+}
+
+.calendar-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.tab-btn {
+    padding: 8px 20px;
+    border: 1px solid #3498db;
+    background-color: white;
+    color: #3498db;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.tab-btn:hover {
+    background-color: #ecf0f1;
+}
+
+.tab-btn.active {
+    background-color: #3498db;
+    color: white;
+}
+
+.calendar-event-count {
+    color: #7f8c8d;
+    font-size: 14px;
+    margin-bottom: 16px;
+}
+
+.calendar-event-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.calendar-event-card {
+    padding: 16px;
+    background-color: #f9f9f9;
+    border-left: 4px solid #9b59b6;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.calendar-event-card:hover {
+    background-color: #f0f0f0;
+    transform: translateX(2px);
+}
+
+.calendar-event-card.all-day {
+    border-left-color: #e67e22;
+}
+
+.calendar-event-card.recurring {
+    border-left-color: #27ae60;
+}
+
+.event-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+}
+
+.event-summary {
+    font-size: 16px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0;
+}
+
+.event-badges {
+    display: flex;
+    gap: 6px;
+}
+
+.event-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    text-transform: uppercase;
+}
+
+.event-badge.all-day {
+    background-color: #e67e22;
+    color: white;
+}
+
+.event-badge.recurring {
+    background-color: #27ae60;
+    color: white;
+}
+
+.event-time {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #7f8c8d;
+}
+
+.event-time-icon {
+    color: #3498db;
+}
+
+.event-location {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: #7f8c8d;
+}
+
+.event-location-icon {
+    color: #e74c3c;
+}
+
+.event-description {
+    font-size: 13px;
+    color: #95a5a6;
+    line-height: 1.4;
+    margin-bottom: 8px;
+    max-height: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.event-conference {
+    margin-top: 8px;
+}
+
+.event-conference a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #3498db;
+    text-decoration: none;
+    padding: 4px 10px;
+    background-color: #e8f4fd;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.event-conference a:hover {
+    background-color: #d1e8f8;
+    color: #2980b9;
+}
+
+.event-organizer {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #95a5a6;
+}
+
+.event-organizer strong {
+    color: #7f8c8d;
+}
+
+/* Date separator for calendar event list */
+.calendar-date-separator {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0 12px 0;
+}
+
+.calendar-date-separator:first-child {
+    margin-top: 0;
+}
+
+.date-label {
+    font-weight: 600;
+    color: #2c3e50;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+.date-line {
+    flex: 1;
+    height: 1px;
+    background-color: #ddd;
+}
+
+/* Empty calendar state */
+.calendar-empty {
+    text-align: center;
+    padding: 40px;
+    color: #7f8c8d;
+}
+
+.calendar-empty-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+    color: #bdc3c7;
+}
+
+/* Responsive adjustments for calendar */
+@media (max-width: 600px) {
+    .calendar-tabs {
+        flex-wrap: wrap;
+    }
+
+    .tab-btn {
+        flex: 1;
+        min-width: 80px;
+        text-align: center;
+    }
+
+    .event-header {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .event-badges {
+        align-self: flex-start;
+    }
+}

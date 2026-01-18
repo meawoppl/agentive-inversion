@@ -29,7 +29,7 @@ diesel-async = { version = "0.4", features = ["postgres", "deadpool"] }
 # Web
 axum = "0.7"
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 
 # Frontend
 yew = { version = "0.21", features = ["csr"] }

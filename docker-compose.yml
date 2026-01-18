@@ -18,14 +18,15 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  app:
     build:
       context: .
-      dockerfile: Dockerfile.backend
-    container_name: agentive-backend
+      dockerfile: Dockerfile
+    container_name: agentive-app
     environment:
       DATABASE_URL: postgres://testuser:testpassword@postgres:5432/agentive_inversion
       RUST_LOG: info
+      FRONTEND_DIR: /app/frontend/dist
     ports:
       - "3000:3000"
     depends_on:
@@ -33,16 +34,6 @@ services:
         condition: service_healthy
     volumes:
       - ./migrations:/app/migrations
-
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    container_name: agentive-frontend
-    ports:
-      - "8080:8080"
-    depends_on:
-      - backend
 
 volumes:
   postgres_data:

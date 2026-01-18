@@ -1,20 +1,30 @@
 #!/bin/bash
 set -e
 
-echo "Waiting for postgres..."
-until PGPASSWORD=testpassword psql -h "postgres" -U "testuser" -d "agentive_inversion" -c '\q' 2>/dev/null; do
-  sleep 1
+# Check that DATABASE_URL is set
+if [ -z "$DATABASE_URL" ]; then
+  echo "ERROR: DATABASE_URL environment variable is not set"
+  exit 1
+fi
+
+echo "Waiting for database to be ready..."
+until psql "$DATABASE_URL" -c '\q' 2>/dev/null; do
+  echo "Database not ready, waiting..."
+  sleep 2
 done
 
-echo "Running database migrations manually..."
-# Run each migration SQL file
+echo "Running database migrations..."
+# Run each migration SQL file in order
 for migration in /app/migrations/*/up.sql; do
   echo "Running migration: $migration"
-  PGPASSWORD=testpassword psql -h "postgres" -U "testuser" -d "agentive_inversion" -f "$migration" || echo "Migration already applied or failed: $migration"
+  psql "$DATABASE_URL" -f "$migration" 2>&1 || echo "Migration already applied or failed: $migration"
 done
 
-echo "Loading seed data..."
-PGPASSWORD=testpassword psql -h "postgres" -U "testuser" -d "agentive_inversion" -f /app/seed-data.sql || echo "Seed data already loaded or failed"
+# Check if seed data file exists
+if [ -f "/app/seed-data.sql" ]; then
+  echo "Loading seed data..."
+  psql "$DATABASE_URL" -f /app/seed-data.sql 2>&1 || echo "Seed data already loaded or failed"
+fi
 
 echo "Starting backend server..."
 exec /app/backend

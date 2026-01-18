@@ -4,11 +4,8 @@
 FROM debian:trixie-slim
 
 RUN apt-get update && \
-    apt-get install -y libpq5 postgresql-client ca-certificates curl && \
+    apt-get install -y libpq5 postgresql-client ca-certificates && \
     rm -rf /var/lib/apt/lists/*
-
-# Install diesel_cli for running migrations
-RUN curl -sSL https://github.com/diesel-rs/diesel/releases/download/v2.1.6/diesel_cli-2.1.6-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
 
 WORKDIR /app
 

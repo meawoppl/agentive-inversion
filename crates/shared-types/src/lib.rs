@@ -684,3 +684,471 @@ pub struct RuleListQuery {
     pub rule_type: Option<String>,
     pub is_active: Option<bool>,
 }
+
+// ============================================================================
+// Rule Matching Engine
+// ============================================================================
+
+/// Input data for rule matching against emails
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailMatchInput {
+    pub from_address: String,
+    pub from_name: Option<String>,
+    pub subject: String,
+    pub body_text: Option<String>,
+    pub snippet: Option<String>,
+    pub labels: Vec<String>,
+    pub to_addresses: Vec<String>,
+    pub cc_addresses: Vec<String>,
+}
+
+/// Result of matching a rule against input
+#[derive(Debug, Clone)]
+pub struct RuleMatchResult {
+    pub rule_id: Uuid,
+    pub rule_name: String,
+    pub matched: bool,
+    pub matched_clauses: Vec<String>,
+    pub action: String,
+    pub action_params: Option<RuleActionParams>,
+    pub priority: i32,
+}
+
+/// Rule matching engine for evaluating rules against input data
+pub struct RuleEngine;
+
+impl RuleEngine {
+    /// Evaluate all rules against email input, returning matching rules sorted by priority (highest first)
+    pub fn match_email(rules: &[AgentRule], input: &EmailMatchInput) -> Vec<RuleMatchResult> {
+        let mut results: Vec<RuleMatchResult> = rules
+            .iter()
+            .filter_map(|rule| {
+                // Parse conditions from JSON string
+                let conditions: RuleConditions = match serde_json::from_str(&rule.conditions) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse rule conditions for {}: {}", rule.id, e);
+                        return None;
+                    }
+                };
+
+                let action_params: Option<RuleActionParams> = rule
+                    .action_params
+                    .as_ref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+
+                let (matched, matched_clauses) = Self::evaluate_conditions(&conditions, input);
+
+                Some(RuleMatchResult {
+                    rule_id: rule.id,
+                    rule_name: rule.name.clone(),
+                    matched,
+                    matched_clauses,
+                    action: rule.action.clone(),
+                    action_params,
+                    priority: rule.priority,
+                })
+            })
+            .filter(|r| r.matched)
+            .collect();
+
+        // Sort by priority (highest first)
+        results.sort_by(|a, b| b.priority.cmp(&a.priority));
+        results
+    }
+
+    /// Evaluate rule conditions against email input
+    fn evaluate_conditions(
+        conditions: &RuleConditions,
+        input: &EmailMatchInput,
+    ) -> (bool, Vec<String>) {
+        let mut matched_clauses = Vec::new();
+        let is_and = conditions.operator.to_uppercase() == "AND";
+
+        for clause in &conditions.clauses {
+            let field_value = Self::get_field_value(&clause.field, input);
+            let matches = Self::evaluate_clause(clause, &field_value);
+
+            if matches {
+                matched_clauses.push(format!(
+                    "{} {} '{}'",
+                    clause.field, clause.matcher, clause.value
+                ));
+            }
+
+            // Short-circuit evaluation
+            if is_and && !matches {
+                return (false, matched_clauses);
+            }
+            if !is_and && matches {
+                return (true, matched_clauses);
+            }
+        }
+
+        // For AND: all must match (if we get here, all matched)
+        // For OR: none matched (if we get here, none matched)
+        (is_and, matched_clauses)
+    }
+
+    /// Get the value of a field from the email input
+    fn get_field_value(field: &str, input: &EmailMatchInput) -> String {
+        match field {
+            "from_address" | "from" | "sender" => input.from_address.clone(),
+            "from_name" | "sender_name" => input.from_name.clone().unwrap_or_default(),
+            "subject" => input.subject.clone(),
+            "body" | "body_text" => input.body_text.clone().unwrap_or_default(),
+            "snippet" => input.snippet.clone().unwrap_or_default(),
+            "to" | "to_addresses" => input.to_addresses.join(", "),
+            "cc" | "cc_addresses" => input.cc_addresses.join(", "),
+            "labels" => input.labels.join(", "),
+            // Combined fields for easier matching
+            "from_full" => {
+                let name = input.from_name.clone().unwrap_or_default();
+                if name.is_empty() {
+                    input.from_address.clone()
+                } else {
+                    format!("{} <{}>", name, input.from_address)
+                }
+            }
+            "content" => {
+                // Combined subject + body for broad content matching
+                let body = input.body_text.clone().unwrap_or_default();
+                format!("{} {}", input.subject, body)
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Evaluate a single clause against a field value
+    fn evaluate_clause(clause: &RuleConditionClause, field_value: &str) -> bool {
+        let (value, pattern) = if clause.case_sensitive {
+            (field_value.to_string(), clause.value.clone())
+        } else {
+            (field_value.to_lowercase(), clause.value.to_lowercase())
+        };
+
+        match clause.matcher.as_str() {
+            "equals" | "exact" => value == pattern,
+            "contains" => value.contains(&pattern),
+            "starts_with" => value.starts_with(&pattern),
+            "ends_with" => value.ends_with(&pattern),
+            "regex" => {
+                match regex::Regex::new(&clause.value) {
+                    Ok(re) => re.is_match(field_value), // Use original value for regex
+                    Err(e) => {
+                        tracing::warn!("Invalid regex pattern '{}': {}", clause.value, e);
+                        false
+                    }
+                }
+            }
+            "not_contains" => !value.contains(&pattern),
+            "not_equals" => value != pattern,
+            "is_empty" => value.is_empty(),
+            "is_not_empty" => !value.is_empty(),
+            _ => {
+                tracing::warn!("Unknown matcher type: {}", clause.matcher);
+                false
+            }
+        }
+    }
+
+    /// Get the highest priority matching rule (if any)
+    pub fn get_best_match(rules: &[AgentRule], input: &EmailMatchInput) -> Option<RuleMatchResult> {
+        Self::match_email(rules, input).into_iter().next()
+    }
+}
+
+/// Build a ProposedTodoAction from rule action params and email input
+pub fn build_todo_action_from_rule(
+    params: &Option<RuleActionParams>,
+    input: &EmailMatchInput,
+) -> ProposedTodoAction {
+    let default_title = if input.subject.len() > 100 {
+        format!("{}...", &input.subject[..97])
+    } else {
+        input.subject.clone()
+    };
+
+    let default_description = format!(
+        "{}\n\n---\nFrom: {} <{}>",
+        input.snippet.clone().unwrap_or_default(),
+        input.from_name.clone().unwrap_or_default(),
+        input.from_address
+    );
+
+    match params {
+        Some(p) => ProposedTodoAction {
+            todo_title: p.todo_title.clone().unwrap_or(default_title),
+            todo_description: p.todo_description.clone().or(Some(default_description)),
+            due_date: None, // TODO: Calculate from due_date_offset_days
+            category_id: p.category_id,
+            priority: p.priority.clone(),
+        },
+        None => ProposedTodoAction {
+            todo_title: default_title,
+            todo_description: Some(default_description),
+            due_date: None,
+            category_id: None,
+            priority: None,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_email() -> EmailMatchInput {
+        EmailMatchInput {
+            from_address: "sender@example.com".to_string(),
+            from_name: Some("John Sender".to_string()),
+            subject: "Action Required: Please review the document".to_string(),
+            body_text: Some("Please review the attached document by Friday.".to_string()),
+            snippet: Some("Please review the attached...".to_string()),
+            labels: vec!["INBOX".to_string(), "IMPORTANT".to_string()],
+            to_addresses: vec!["me@example.com".to_string()],
+            cc_addresses: vec![],
+        }
+    }
+
+    fn make_test_rule(
+        name: &str,
+        conditions: RuleConditions,
+        action: &str,
+        priority: i32,
+    ) -> AgentRule {
+        AgentRule {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            description: None,
+            source_type: "email".to_string(),
+            rule_type: "contains".to_string(),
+            conditions: serde_json::to_string(&conditions).unwrap(),
+            action: action.to_string(),
+            action_params: None,
+            priority,
+            is_active: true,
+            created_from_decision_id: None,
+            match_count: 0,
+            last_matched_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_contains_matcher() {
+        let input = make_test_email();
+        let conditions = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "subject".to_string(),
+                matcher: "contains".to_string(),
+                value: "action required".to_string(),
+                case_sensitive: false,
+            }],
+        };
+
+        let rule = make_test_rule("Test Rule", conditions, "create_todo", 10);
+        let results = RuleEngine::match_email(&[rule], &input);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].matched);
+    }
+
+    #[test]
+    fn test_sender_matcher() {
+        let input = make_test_email();
+        let conditions = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "from_address".to_string(),
+                matcher: "ends_with".to_string(),
+                value: "@example.com".to_string(),
+                case_sensitive: false,
+            }],
+        };
+
+        let rule = make_test_rule("Sender Rule", conditions, "ignore", 5);
+        let results = RuleEngine::match_email(&[rule], &input);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].matched);
+        assert_eq!(results[0].action, "ignore");
+    }
+
+    #[test]
+    fn test_and_operator() {
+        let input = make_test_email();
+        let conditions = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![
+                RuleConditionClause {
+                    field: "subject".to_string(),
+                    matcher: "contains".to_string(),
+                    value: "action required".to_string(),
+                    case_sensitive: false,
+                },
+                RuleConditionClause {
+                    field: "from_address".to_string(),
+                    matcher: "contains".to_string(),
+                    value: "example.com".to_string(),
+                    case_sensitive: false,
+                },
+            ],
+        };
+
+        let rule = make_test_rule("AND Rule", conditions, "create_todo", 10);
+        let results = RuleEngine::match_email(&[rule], &input);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].matched);
+    }
+
+    #[test]
+    fn test_and_operator_fails_partial() {
+        let input = make_test_email();
+        let conditions = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![
+                RuleConditionClause {
+                    field: "subject".to_string(),
+                    matcher: "contains".to_string(),
+                    value: "action required".to_string(),
+                    case_sensitive: false,
+                },
+                RuleConditionClause {
+                    field: "from_address".to_string(),
+                    matcher: "contains".to_string(),
+                    value: "notfound.com".to_string(),
+                    case_sensitive: false,
+                },
+            ],
+        };
+
+        let rule = make_test_rule("AND Rule", conditions, "create_todo", 10);
+        let results = RuleEngine::match_email(&[rule], &input);
+
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_or_operator() {
+        let input = make_test_email();
+        let conditions = RuleConditions {
+            operator: "OR".to_string(),
+            clauses: vec![
+                RuleConditionClause {
+                    field: "subject".to_string(),
+                    matcher: "contains".to_string(),
+                    value: "notfound".to_string(),
+                    case_sensitive: false,
+                },
+                RuleConditionClause {
+                    field: "from_address".to_string(),
+                    matcher: "contains".to_string(),
+                    value: "example.com".to_string(),
+                    case_sensitive: false,
+                },
+            ],
+        };
+
+        let rule = make_test_rule("OR Rule", conditions, "archive", 10);
+        let results = RuleEngine::match_email(&[rule], &input);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].matched);
+    }
+
+    #[test]
+    fn test_priority_sorting() {
+        let input = make_test_email();
+
+        let conditions1 = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "subject".to_string(),
+                matcher: "contains".to_string(),
+                value: "action".to_string(),
+                case_sensitive: false,
+            }],
+        };
+
+        let conditions2 = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "subject".to_string(),
+                matcher: "contains".to_string(),
+                value: "required".to_string(),
+                case_sensitive: false,
+            }],
+        };
+
+        let rule1 = make_test_rule("Low Priority", conditions1, "ignore", 5);
+        let rule2 = make_test_rule("High Priority", conditions2, "create_todo", 100);
+
+        let results = RuleEngine::match_email(&[rule1, rule2], &input);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].rule_name, "High Priority");
+        assert_eq!(results[0].priority, 100);
+        assert_eq!(results[1].rule_name, "Low Priority");
+        assert_eq!(results[1].priority, 5);
+    }
+
+    #[test]
+    fn test_regex_matcher() {
+        let input = make_test_email();
+        let conditions = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "from_address".to_string(),
+                matcher: "regex".to_string(),
+                value: r".*@example\.com$".to_string(),
+                case_sensitive: false,
+            }],
+        };
+
+        let rule = make_test_rule("Regex Rule", conditions, "create_todo", 10);
+        let results = RuleEngine::match_email(&[rule], &input);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].matched);
+    }
+
+    #[test]
+    fn test_case_sensitive() {
+        let input = make_test_email();
+
+        // Case insensitive should match
+        let conditions1 = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "subject".to_string(),
+                matcher: "contains".to_string(),
+                value: "ACTION REQUIRED".to_string(),
+                case_sensitive: false,
+            }],
+        };
+
+        // Case sensitive should not match (subject has different case)
+        let conditions2 = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "subject".to_string(),
+                matcher: "contains".to_string(),
+                value: "ACTION REQUIRED".to_string(),
+                case_sensitive: true,
+            }],
+        };
+
+        let rule1 = make_test_rule("Insensitive", conditions1, "create_todo", 10);
+        let rule2 = make_test_rule("Sensitive", conditions2, "create_todo", 10);
+
+        let results1 = RuleEngine::match_email(&[rule1], &input);
+        let results2 = RuleEngine::match_email(&[rule2], &input);
+
+        assert_eq!(results1.len(), 1);
+        assert_eq!(results2.len(), 0);
+    }
+}

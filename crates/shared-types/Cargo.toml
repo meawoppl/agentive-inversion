@@ -12,3 +12,5 @@ serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 diesel = { workspace = true, optional = true }
+regex = "1.12.2"
+tracing = "0.1.44"

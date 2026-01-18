@@ -161,3 +161,134 @@ pub async fn mark_email_processed(
 
     Ok(())
 }
+
+// ============================================================================
+// Agent Rules
+// ============================================================================
+
+/// Get all active rules for email source type
+pub async fn get_active_email_rules(
+    conn: &mut AsyncPgConnection,
+) -> anyhow::Result<Vec<shared_types::AgentRule>> {
+    use crate::schema::agent_rules::dsl::*;
+
+    let rules = agent_rules
+        .filter(is_active.eq(true))
+        .filter(source_type.eq("email").or(source_type.eq("any")))
+        .order_by((priority.desc(), created_at.desc()))
+        .load::<shared_types::AgentRule>(conn)
+        .await?;
+
+    Ok(rules)
+}
+
+/// Increment the match count for a rule
+pub async fn increment_rule_match_count(
+    conn: &mut AsyncPgConnection,
+    rule_id: Uuid,
+) -> anyhow::Result<()> {
+    use crate::schema::agent_rules::dsl::*;
+
+    diesel::update(agent_rules.filter(id.eq(rule_id)))
+        .set((
+            match_count.eq(match_count + 1),
+            last_matched_at.eq(Some(Utc::now())),
+        ))
+        .execute(conn)
+        .await?;
+
+    Ok(())
+}
+
+// ============================================================================
+// Agent Decisions
+// ============================================================================
+
+/// Create a new agent decision
+#[allow(clippy::too_many_arguments)]
+pub async fn create_decision(
+    conn: &mut AsyncPgConnection,
+    source_type_val: &str,
+    source_id_val: Option<Uuid>,
+    source_external_id_val: Option<&str>,
+    decision_type_val: &str,
+    proposed_action_val: &str,
+    reasoning_val: &str,
+    reasoning_details_val: Option<&str>,
+    confidence_val: f32,
+    status_val: &str,
+    applied_rule_id_val: Option<Uuid>,
+) -> anyhow::Result<Uuid> {
+    use crate::schema::agent_decisions::dsl::*;
+
+    let decision_id = diesel::insert_into(agent_decisions)
+        .values((
+            source_type.eq(source_type_val),
+            source_id.eq(source_id_val),
+            source_external_id.eq(source_external_id_val),
+            decision_type.eq(decision_type_val),
+            proposed_action.eq(proposed_action_val),
+            reasoning.eq(reasoning_val),
+            reasoning_details.eq(reasoning_details_val),
+            confidence.eq(confidence_val),
+            status.eq(status_val),
+            applied_rule_id.eq(applied_rule_id_val),
+        ))
+        .returning(id)
+        .get_result::<Uuid>(conn)
+        .await?;
+
+    Ok(decision_id)
+}
+
+/// Create a todo from an approved decision
+#[allow(clippy::too_many_arguments)]
+pub async fn create_todo_from_decision(
+    conn: &mut AsyncPgConnection,
+    decision_id_val: Uuid,
+    title_val: &str,
+    description_val: Option<&str>,
+    source_val: &str,
+    source_id_val: Option<&str>,
+    due_date_val: Option<DateTime<Utc>>,
+    category_id_val: Option<Uuid>,
+) -> anyhow::Result<Uuid> {
+    use crate::schema::todos::dsl::*;
+
+    let todo_id = diesel::insert_into(todos)
+        .values((
+            title.eq(title_val),
+            description.eq(description_val),
+            completed.eq(false),
+            source.eq(source_val),
+            source_id.eq(source_id_val),
+            due_date.eq(due_date_val),
+            category_id.eq(category_id_val),
+            decision_id.eq(Some(decision_id_val)),
+        ))
+        .returning(id)
+        .get_result::<Uuid>(conn)
+        .await?;
+
+    Ok(todo_id)
+}
+
+/// Update a decision with the result todo ID
+pub async fn update_decision_result_todo(
+    conn: &mut AsyncPgConnection,
+    decision_id_val: Uuid,
+    todo_id_val: Uuid,
+) -> anyhow::Result<()> {
+    use crate::schema::agent_decisions::dsl::*;
+
+    diesel::update(agent_decisions.filter(id.eq(decision_id_val)))
+        .set((
+            result_todo_id.eq(Some(todo_id_val)),
+            status.eq("executed"),
+            executed_at.eq(Some(Utc::now())),
+        ))
+        .execute(conn)
+        .await?;
+
+    Ok(())
+}

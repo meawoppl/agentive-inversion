@@ -14,11 +14,9 @@ until psql "$DATABASE_URL" -c '\q' 2>/dev/null; do
 done
 
 echo "Running database migrations..."
-# Run each migration SQL file in order
-for migration in /app/migrations/*/up.sql; do
-  echo "Running migration: $migration"
-  psql "$DATABASE_URL" -f "$migration" 2>&1 || echo "Migration already applied or failed: $migration"
-done
+# Use diesel_cli for proper migration tracking
+# This tracks which migrations have been applied in __diesel_schema_migrations table
+diesel migration run --migration-dir /app/migrations
 
 echo "Starting backend server..."
 exec /app/backend

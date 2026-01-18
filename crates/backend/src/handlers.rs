@@ -18,13 +18,13 @@ use uuid::Uuid;
 
 use crate::db::{
     agent_rules, calendar_accounts, calendar_events, categories, chat_messages, decisions,
-    email_accounts, emails, todos, DbPool,
+    email_accounts, emails, get_conn, todos, DbPool,
 };
 use crate::error::{ApiError, ApiResult};
 
 // Todo handlers
 pub async fn list_todos(State(pool): State<DbPool>) -> ApiResult<Json<Vec<Todo>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     let items = todos::list_all(&mut conn).await?;
     Ok(Json(items))
 }
@@ -33,7 +33,7 @@ pub async fn create_todo(
     State(pool): State<DbPool>,
     Json(payload): Json<CreateTodoRequest>,
 ) -> ApiResult<Json<Todo>> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     let todo = todos::create(
         &mut conn,
         &payload.title,
@@ -51,7 +51,7 @@ pub async fn update_todo(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateTodoRequest>,
 ) -> ApiResult<Json<Todo>> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     let todo = todos::update(
         &mut conn,
         id,
@@ -70,7 +70,7 @@ pub async fn delete_todo(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     todos::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -275,7 +275,7 @@ pub async fn gmail_oauth_callback(
 
 // Category handlers
 pub async fn list_categories(State(pool): State<DbPool>) -> ApiResult<Json<Vec<Category>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     let items = categories::list_all(&mut conn).await?;
     Ok(Json(items))
 }
@@ -284,7 +284,7 @@ pub async fn create_category(
     State(pool): State<DbPool>,
     Json(payload): Json<CreateCategoryRequest>,
 ) -> ApiResult<Json<Category>> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     let category = categories::create(&mut conn, &payload.name, payload.color.as_deref()).await?;
     Ok(Json(category))
 }
@@ -294,7 +294,7 @@ pub async fn update_category(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateCategoryRequest>,
 ) -> ApiResult<Json<Category>> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     let category = categories::update(
         &mut conn,
         id,
@@ -309,7 +309,7 @@ pub async fn delete_category(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = pool.get().await?;
+    let mut conn = get_conn(&pool).await?;
     categories::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

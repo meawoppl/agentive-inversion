@@ -38,7 +38,7 @@ impl GmailClient {
 
         let auth = google_gmail1::yup_oauth2::InstalledFlowAuthenticator::builder(
             secret,
-            google_gmail1::yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+            google_gmail1::yup_oauth2::InstalledFlowReturnMethod::Interactive,
         )
         .persist_tokens_to_disk(Path::new(&config.token_cache_path))
         .build()

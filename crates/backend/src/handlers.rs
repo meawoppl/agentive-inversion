@@ -6,17 +6,19 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use shared_types::{
     AgentDecisionResponse, AgentRuleResponse, ApproveDecisionRequest, BatchApproveDecisionsRequest,
-    BatchOperationFailure, BatchOperationResponse, BatchRejectDecisionsRequest, Category,
-    ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse, ConnectEmailAccountRequest,
-    CreateAgentDecisionRequest, CreateAgentRuleRequest, CreateCategoryRequest, CreateTodoRequest,
-    DecisionStats, EmailAccountResponse, EmailListQuery, EmailResponse, ProposedTodoAction,
-    RejectDecisionRequest, RuleListQuery, SendChatMessageRequest, SuggestedAction, Todo,
-    UpdateAgentRuleRequest, UpdateCategoryRequest, UpdateTodoRequest,
+    BatchOperationFailure, BatchOperationResponse, BatchRejectDecisionsRequest, CalendarEventQuery,
+    CalendarEventResponse, Category, ChatHistoryQuery, ChatIntent, ChatMessageResponse,
+    ChatResponse, ConnectEmailAccountRequest, CreateAgentDecisionRequest, CreateAgentRuleRequest,
+    CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailAccountResponse, EmailListQuery,
+    EmailResponse, ProposedTodoAction, RejectDecisionRequest, RuleListQuery,
+    SendChatMessageRequest, SuggestedAction, Todo, UpdateAgentRuleRequest, UpdateCategoryRequest,
+    UpdateTodoRequest,
 };
 use uuid::Uuid;
 
 use crate::db::{
-    agent_rules, categories, chat_messages, decisions, email_accounts, emails, todos, DbPool,
+    agent_rules, calendar_accounts, calendar_events, categories, chat_messages, decisions,
+    email_accounts, emails, todos, DbPool,
 };
 
 // Todo handlers
@@ -1236,4 +1238,210 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &s[..max_len - 3])
     }
+}
+
+// Calendar event handlers
+pub async fn list_calendar_events(
+    State(pool): State<DbPool>,
+    Query(params): Query<CalendarEventQuery>,
+) -> Result<Json<Vec<CalendarEventResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let events = calendar_events::list_events(
+        &mut conn,
+        params.account_id,
+        params.since,
+        params.until,
+        params.processed,
+        params.limit,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to list calendar events: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
+    Ok(Json(responses))
+}
+
+pub async fn get_calendar_event(
+    State(pool): State<DbPool>,
+    Path(event_id): Path<Uuid>,
+) -> Result<Json<CalendarEventResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let event = calendar_events::get_by_id(&mut conn, event_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get calendar event: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(event.into()))
+}
+
+pub async fn get_todays_events(
+    State(pool): State<DbPool>,
+) -> Result<Json<Vec<CalendarEventResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let events = calendar_events::get_today(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to get today's events: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
+    Ok(Json(responses))
+}
+
+pub async fn get_this_weeks_events(
+    State(pool): State<DbPool>,
+) -> Result<Json<Vec<CalendarEventResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let events = calendar_events::get_this_week(&mut conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get this week's events: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
+    Ok(Json(responses))
+}
+
+// Calendar account handlers
+#[derive(Debug, Deserialize)]
+pub struct CreateCalendarAccountRequest {
+    pub account_name: String,
+    pub calendar_id: String,
+    pub email_address: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CalendarAccountResponse {
+    pub id: Uuid,
+    pub account_name: String,
+    pub calendar_id: String,
+    pub email_address: Option<String>,
+    pub sync_status: String,
+    pub last_synced: Option<chrono::DateTime<chrono::Utc>>,
+    pub is_active: bool,
+}
+
+impl From<shared_types::CalendarAccount> for CalendarAccountResponse {
+    fn from(account: shared_types::CalendarAccount) -> Self {
+        CalendarAccountResponse {
+            id: account.id,
+            account_name: account.account_name,
+            calendar_id: account.calendar_id,
+            email_address: account.email_address,
+            sync_status: account.sync_status,
+            last_synced: account.last_synced,
+            is_active: account.is_active,
+        }
+    }
+}
+
+pub async fn list_calendar_accounts(
+    State(pool): State<DbPool>,
+) -> Result<Json<Vec<CalendarAccountResponse>>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let accounts = calendar_accounts::list(&mut conn).await.map_err(|e| {
+        tracing::error!("Failed to list calendar accounts: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let responses: Vec<CalendarAccountResponse> = accounts.into_iter().map(Into::into).collect();
+    Ok(Json(responses))
+}
+
+pub async fn create_calendar_account(
+    State(pool): State<DbPool>,
+    Json(payload): Json<CreateCalendarAccountRequest>,
+) -> Result<Json<CalendarAccountResponse>, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let account = calendar_accounts::create(
+        &mut conn,
+        &payload.account_name,
+        &payload.calendar_id,
+        payload.email_address.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create calendar account: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(account.into()))
+}
+
+pub async fn delete_calendar_account(
+    State(pool): State<DbPool>,
+    Path(account_id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    calendar_accounts::delete(&mut conn, account_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete calendar account: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn toggle_calendar_account(
+    State(pool): State<DbPool>,
+    Path(account_id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    let mut conn = pool.get().await.map_err(|e| {
+        tracing::error!("Failed to get db connection: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Get current state
+    let account = calendar_accounts::get_by_id(&mut conn, account_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get calendar account: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Toggle active state
+    calendar_accounts::set_active(&mut conn, account_id, !account.is_active)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to toggle calendar account: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(StatusCode::OK)
 }

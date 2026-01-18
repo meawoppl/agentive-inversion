@@ -58,6 +58,42 @@ diesel::table! {
         calendar_id -> Varchar,
         last_synced -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
+        email_address -> Nullable<Varchar>,
+        oauth_refresh_token -> Nullable<Text>,
+        oauth_access_token -> Nullable<Text>,
+        oauth_token_expires_at -> Nullable<Timestamptz>,
+        sync_token -> Nullable<Text>,
+        sync_status -> Varchar,
+        last_sync_error -> Nullable<Text>,
+        is_active -> Bool,
+    }
+}
+
+diesel::table! {
+    calendar_events (id) {
+        id -> Uuid,
+        account_id -> Uuid,
+        #[max_length = 255]
+        google_event_id -> Varchar,
+        #[max_length = 255]
+        ical_uid -> Nullable<Varchar>,
+        summary -> Nullable<Text>,
+        description -> Nullable<Text>,
+        location -> Nullable<Text>,
+        start_time -> Timestamptz,
+        end_time -> Timestamptz,
+        all_day -> Bool,
+        recurring -> Bool,
+        recurrence_rule -> Nullable<Text>,
+        #[max_length = 50]
+        status -> Varchar,
+        #[max_length = 255]
+        organizer_email -> Nullable<Varchar>,
+        attendees -> Nullable<Text>,
+        conference_link -> Nullable<Text>,
+        fetched_at -> Timestamptz,
+        processed -> Bool,
+        processed_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -137,6 +173,7 @@ diesel::table! {
 
 // Note: agent_decisions and todos have bidirectional FKs, so we can only define one joinable
 diesel::joinable!(emails -> email_accounts (account_id));
+diesel::joinable!(calendar_events -> calendar_accounts (account_id));
 diesel::joinable!(todos -> categories (category_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -144,6 +181,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     agent_rules,
     agent_decisions,
     calendar_accounts,
+    calendar_events,
     categories,
     email_accounts,
     emails,

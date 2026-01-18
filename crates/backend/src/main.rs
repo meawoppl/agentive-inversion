@@ -87,6 +87,37 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/chat", post(handlers::send_chat_message))
         .route("/api/chat/history", get(handlers::get_chat_history))
         .route("/api/chat/history", delete(handlers::clear_chat_history))
+        // Calendar event routes
+        .route("/api/calendar-events", get(handlers::list_calendar_events))
+        .route(
+            "/api/calendar-events/today",
+            get(handlers::get_todays_events),
+        )
+        .route(
+            "/api/calendar-events/week",
+            get(handlers::get_this_weeks_events),
+        )
+        .route(
+            "/api/calendar-events/:id",
+            get(handlers::get_calendar_event),
+        )
+        // Calendar account routes
+        .route(
+            "/api/calendar-accounts",
+            get(handlers::list_calendar_accounts),
+        )
+        .route(
+            "/api/calendar-accounts",
+            post(handlers::create_calendar_account),
+        )
+        .route(
+            "/api/calendar-accounts/:id",
+            delete(handlers::delete_calendar_account),
+        )
+        .route(
+            "/api/calendar-accounts/:id/toggle",
+            post(handlers::toggle_calendar_account),
+        )
         .layer(build_cors_layer())
         .with_state(pool);
 

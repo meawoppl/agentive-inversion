@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use diesel::prelude::*;
 use diesel_async::{
     pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager, ManagerConfig},
@@ -1060,6 +1060,353 @@ pub mod chat_messages {
         use crate::schema::chat_messages::dsl::*;
 
         diesel::delete(chat_messages).execute(conn).await?;
+
+        Ok(())
+    }
+}
+
+// Calendar events database operations
+pub mod calendar_events {
+    use super::*;
+    use shared_types::CalendarEvent;
+
+    pub async fn list_events(
+        conn: &mut AsyncPgConnection,
+        account_id_filter: Option<Uuid>,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+        processed_filter: Option<bool>,
+        limit_val: Option<i64>,
+    ) -> anyhow::Result<Vec<CalendarEvent>> {
+        use crate::schema::calendar_events::dsl::*;
+
+        let mut query = calendar_events.order_by(start_time.asc()).into_boxed();
+
+        if let Some(acc_id) = account_id_filter {
+            query = query.filter(account_id.eq(acc_id));
+        }
+
+        if let Some(since_time) = since {
+            query = query.filter(start_time.ge(since_time));
+        }
+
+        if let Some(until_time) = until {
+            query = query.filter(end_time.le(until_time));
+        }
+
+        if let Some(proc) = processed_filter {
+            query = query.filter(processed.eq(proc));
+        }
+
+        if let Some(l) = limit_val {
+            query = query.limit(l);
+        } else {
+            query = query.limit(100);
+        }
+
+        let items = query.load::<CalendarEvent>(conn).await?;
+        Ok(items)
+    }
+
+    pub async fn get_by_id(
+        conn: &mut AsyncPgConnection,
+        event_id: Uuid,
+    ) -> anyhow::Result<Option<CalendarEvent>> {
+        use crate::schema::calendar_events::dsl::*;
+
+        let event = calendar_events
+            .filter(id.eq(event_id))
+            .first::<CalendarEvent>(conn)
+            .await
+            .optional()?;
+
+        Ok(event)
+    }
+
+    pub async fn get_today(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<CalendarEvent>> {
+        use crate::schema::calendar_events::dsl::*;
+
+        let now = Utc::now();
+        let start_of_day = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let end_of_day = now.date_naive().and_hms_opt(23, 59, 59).unwrap().and_utc();
+
+        let items = calendar_events
+            .filter(start_time.ge(start_of_day))
+            .filter(start_time.le(end_of_day))
+            .order_by(start_time.asc())
+            .load::<CalendarEvent>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn get_this_week(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<CalendarEvent>> {
+        use crate::schema::calendar_events::dsl::*;
+
+        let now = Utc::now();
+        let days_from_monday = now.weekday().num_days_from_monday() as i64;
+        let start_of_week = (now - chrono::Duration::days(days_from_monday))
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let end_of_week = start_of_week + chrono::Duration::days(7);
+
+        let items = calendar_events
+            .filter(start_time.ge(start_of_week))
+            .filter(start_time.lt(end_of_week))
+            .order_by(start_time.asc())
+            .load::<CalendarEvent>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn get_unprocessed(
+        conn: &mut AsyncPgConnection,
+    ) -> anyhow::Result<Vec<CalendarEvent>> {
+        use crate::schema::calendar_events::dsl::*;
+
+        let items = calendar_events
+            .filter(processed.eq(false))
+            .order_by(start_time.asc())
+            .load::<CalendarEvent>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn mark_processed(
+        conn: &mut AsyncPgConnection,
+        event_id: Uuid,
+    ) -> anyhow::Result<()> {
+        use crate::schema::calendar_events::dsl::*;
+
+        diesel::update(calendar_events.filter(id.eq(event_id)))
+            .set((processed.eq(true), processed_at.eq(Some(Utc::now()))))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert(
+        conn: &mut AsyncPgConnection,
+        account_id_val: Uuid,
+        google_event_id_val: &str,
+        ical_uid_val: Option<&str>,
+        summary_val: Option<&str>,
+        description_val: Option<&str>,
+        location_val: Option<&str>,
+        start_time_val: DateTime<Utc>,
+        end_time_val: DateTime<Utc>,
+        all_day_val: bool,
+        recurring_val: bool,
+        recurrence_rule_val: Option<&str>,
+        status_val: &str,
+        organizer_email_val: Option<&str>,
+        attendees_val: Option<&str>,
+        conference_link_val: Option<&str>,
+    ) -> anyhow::Result<CalendarEvent> {
+        use crate::schema::calendar_events::dsl::*;
+
+        // Try to find existing event
+        let existing = calendar_events
+            .filter(account_id.eq(account_id_val))
+            .filter(google_event_id.eq(google_event_id_val))
+            .first::<CalendarEvent>(conn)
+            .await
+            .optional()?;
+
+        if let Some(existing_event) = existing {
+            // Update existing event
+            diesel::update(calendar_events.filter(id.eq(existing_event.id)))
+                .set((
+                    summary.eq(summary_val),
+                    description.eq(description_val),
+                    location.eq(location_val),
+                    start_time.eq(start_time_val),
+                    end_time.eq(end_time_val),
+                    all_day.eq(all_day_val),
+                    recurring.eq(recurring_val),
+                    recurrence_rule.eq(recurrence_rule_val),
+                    status.eq(status_val),
+                    organizer_email.eq(organizer_email_val),
+                    attendees.eq(attendees_val),
+                    conference_link.eq(conference_link_val),
+                    fetched_at.eq(Utc::now()),
+                    // Reset processed if event details changed significantly
+                    processed.eq(false),
+                    processed_at.eq(None::<DateTime<Utc>>),
+                ))
+                .execute(conn)
+                .await?;
+
+            // Fetch updated event
+            let updated = calendar_events
+                .filter(id.eq(existing_event.id))
+                .first::<CalendarEvent>(conn)
+                .await?;
+            Ok(updated)
+        } else {
+            // Insert new event
+            let new_event = diesel::insert_into(calendar_events)
+                .values((
+                    account_id.eq(account_id_val),
+                    google_event_id.eq(google_event_id_val),
+                    ical_uid.eq(ical_uid_val),
+                    summary.eq(summary_val),
+                    description.eq(description_val),
+                    location.eq(location_val),
+                    start_time.eq(start_time_val),
+                    end_time.eq(end_time_val),
+                    all_day.eq(all_day_val),
+                    recurring.eq(recurring_val),
+                    recurrence_rule.eq(recurrence_rule_val),
+                    status.eq(status_val),
+                    organizer_email.eq(organizer_email_val),
+                    attendees.eq(attendees_val),
+                    conference_link.eq(conference_link_val),
+                ))
+                .get_result::<CalendarEvent>(conn)
+                .await?;
+
+            Ok(new_event)
+        }
+    }
+}
+
+// Calendar accounts database operations
+pub mod calendar_accounts {
+    use super::*;
+    use shared_types::CalendarAccount;
+
+    pub async fn list(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<CalendarAccount>> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        let items = calendar_accounts
+            .order_by(created_at.desc())
+            .load::<CalendarAccount>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn get_by_id(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+    ) -> anyhow::Result<Option<CalendarAccount>> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        let account = calendar_accounts
+            .filter(id.eq(account_id))
+            .first::<CalendarAccount>(conn)
+            .await
+            .optional()?;
+
+        Ok(account)
+    }
+
+    pub async fn get_active(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<CalendarAccount>> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        let items = calendar_accounts
+            .filter(is_active.eq(true))
+            .order_by(created_at.desc())
+            .load::<CalendarAccount>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    pub async fn create(
+        conn: &mut AsyncPgConnection,
+        account_name_val: &str,
+        calendar_id_val: &str,
+        email_address_val: Option<&str>,
+    ) -> anyhow::Result<CalendarAccount> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        let new_account = diesel::insert_into(calendar_accounts)
+            .values((
+                account_name.eq(account_name_val),
+                calendar_id.eq(calendar_id_val),
+                email_address.eq(email_address_val),
+                sync_status.eq("pending"),
+                is_active.eq(true),
+            ))
+            .get_result::<CalendarAccount>(conn)
+            .await?;
+
+        Ok(new_account)
+    }
+
+    pub async fn update_oauth_tokens(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+        refresh_token: Option<&str>,
+        access_token: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<()> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        diesel::update(calendar_accounts.filter(id.eq(account_id)))
+            .set((
+                oauth_refresh_token.eq(refresh_token),
+                oauth_access_token.eq(access_token),
+                oauth_token_expires_at.eq(expires_at),
+                sync_status.eq("ready"),
+            ))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_sync_status(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+        new_status: &str,
+        error_msg: Option<&str>,
+        new_sync_token: Option<&str>,
+    ) -> anyhow::Result<()> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        diesel::update(calendar_accounts.filter(id.eq(account_id)))
+            .set((
+                sync_status.eq(new_status),
+                last_sync_error.eq(error_msg),
+                sync_token.eq(new_sync_token),
+                last_synced.eq(Some(Utc::now())),
+            ))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete(conn: &mut AsyncPgConnection, account_id: Uuid) -> anyhow::Result<()> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        diesel::delete(calendar_accounts.filter(id.eq(account_id)))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn set_active(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+        active: bool,
+    ) -> anyhow::Result<()> {
+        use crate::schema::calendar_accounts::dsl::*;
+
+        diesel::update(calendar_accounts.filter(id.eq(account_id)))
+            .set(is_active.eq(active))
+            .execute(conn)
+            .await?;
 
         Ok(())
     }

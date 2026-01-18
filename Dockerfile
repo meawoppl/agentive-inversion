@@ -1,7 +1,7 @@
 # Unified Dockerfile for frontend + backend
 # Expects pre-built artifacts from CI/CD pipeline
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && \
     apt-get install -y libpq5 postgresql-client ca-certificates curl && \

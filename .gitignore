@@ -38,3 +38,7 @@ mrg-setup.toml
 
 # Local analysis output
 inbox_senders.txt
+
+# Dev script runtime files
+.dev-pids/
+.dev-logs/

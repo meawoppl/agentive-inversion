@@ -6,8 +6,7 @@ This guide explains how to run the entire application stack using Docker for qui
 
 The Docker setup includes:
 - **PostgreSQL 15**: Database with test data
-- **Backend**: Axum API server
-- **Frontend**: Yew WASM app served via Nginx
+- **App**: Single container serving both API and frontend
 
 Everything runs in containers with no external dependencies needed.
 
@@ -27,15 +26,14 @@ docker-compose up --build
 
 This will:
 1. Start PostgreSQL database
-2. Build and start the backend (runs migrations)
-3. Build and start the frontend
+2. Build and start the app (runs migrations)
 
 ### 2. Access the Application
 
 Once all services are running:
-- **Frontend**: http://localhost:8080
-- **Backend API**: http://localhost:3000
+- **Application**: http://localhost:3000
 - **Health Check**: http://localhost:3000/health
+- **API**: http://localhost:3000/api/*
 
 ### 3. Stop Everything
 
@@ -73,10 +71,7 @@ You can modify `seed-data.sql` to customize the test data.
 ### Rebuilding After Code Changes
 
 ```bash
-# Rebuild and restart specific service
-docker-compose up --build backend
-
-# Or rebuild everything
+# Rebuild and restart
 docker-compose up --build
 ```
 
@@ -87,8 +82,7 @@ docker-compose up --build
 docker-compose logs -f
 
 # Specific service
-docker-compose logs -f backend
-docker-compose logs -f frontend
+docker-compose logs -f app
 docker-compose logs -f postgres
 ```
 
@@ -123,28 +117,28 @@ docker-compose up --build
 ┌─────────────────────────────────────┐
 │         Docker Network              │
 │                                     │
-│  ┌──────────┐      ┌───────────┐  │
-│  │          │      │           │  │
-│  │ Frontend ├─────►│  Backend  │  │
-│  │ (Nginx)  │      │  (Axum)   │  │
-│  │   :8080  │      │   :3000   │  │
-│  │          │      │           │  │
-│  └──────────┘      └─────┬─────┘  │
-│                          │         │
-│                    ┌─────▼──────┐  │
-│                    │            │  │
-│                    │ PostgreSQL │  │
-│                    │   :5432    │  │
-│                    │            │  │
-│                    └────────────┘  │
+│  ┌─────────────────────────────┐   │
+│  │           App               │   │
+│  │  (Axum backend + frontend)  │   │
+│  │          :3000              │   │
+│  │                             │   │
+│  │  /api/* → API handlers      │   │
+│  │  /*     → Static frontend   │   │
+│  └─────────────┬───────────────┘   │
+│                │                    │
+│          ┌─────▼──────┐            │
+│          │            │            │
+│          │ PostgreSQL │            │
+│          │   :5432    │            │
+│          │            │            │
+│          └────────────┘            │
 │                                     │
 └─────────────────────────────────────┘
          │
          │ Port Mappings
          ▼
     Host Machine
-    localhost:8080 → Frontend
-    localhost:3000 → Backend API
+    localhost:3000 → App (API + Frontend)
     localhost:5432 → Database
 ```
 
@@ -164,24 +158,19 @@ Edit `docker-compose.yml` to change port mappings:
 
 ```yaml
 services:
-  frontend:
+  app:
     ports:
-      - "9090:8080"  # Change host port to 9090
-
-  backend:
-    ports:
-      - "4000:3000"  # Change host port to 4000
+      - "8080:3000"  # Change host port to 8080
 ```
 
 ## Troubleshooting
 
 ### Port Already in Use
 
-If ports 8080, 3000, or 5432 are already in use:
+If port 3000 or 5432 is already in use:
 
 ```bash
 # Find what's using the port
-lsof -i :8080
 lsof -i :3000
 lsof -i :5432
 
@@ -197,27 +186,16 @@ docker system prune -a
 docker-compose up --build
 ```
 
-### Backend Won't Start
+### App Won't Start
 
 Check if migrations are failing:
 ```bash
-docker-compose logs backend
+docker-compose logs app
 ```
 
 Common issues:
 - Database not ready: Wait for postgres health check
 - Migration errors: Check `migrations/` directory
-
-### Frontend Shows 502 Bad Gateway
-
-The frontend is trying to proxy to the backend but can't connect:
-```bash
-# Check if backend is running
-docker-compose ps
-
-# Check backend logs
-docker-compose logs backend
-```
 
 ## Differences from Production
 
@@ -226,7 +204,6 @@ This Docker setup is for **testing only**:
 1. **No Security**:
    - No HTTPS
    - Hardcoded credentials
-   - CORS fully open
    - No authentication
 
 2. **No Gmail/Calendar Pollers**:
@@ -253,8 +230,8 @@ You can run services independently:
 # Just the database
 docker-compose up postgres
 
-# Database + Backend
-docker-compose up postgres backend
+# Database + App
+docker-compose up postgres app
 
 # Everything
 docker-compose up

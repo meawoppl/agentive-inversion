@@ -4,7 +4,10 @@ use axum::{
     Router,
 };
 use std::net::SocketAddr;
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    services::{ServeDir, ServeFile},
+};
 
 mod db;
 mod handlers;
@@ -83,8 +86,24 @@ async fn main() -> anyhow::Result<()> {
         .layer(build_cors_layer())
         .with_state(pool);
 
+    // Serve static frontend files if the directory exists
+    let frontend_dir =
+        std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".to_string());
+    let app = if std::path::Path::new(&frontend_dir).exists() {
+        tracing::info!("Serving frontend from {}", frontend_dir);
+        let index_path = format!("{}/index.html", frontend_dir);
+        let serve_dir = ServeDir::new(&frontend_dir).not_found_service(ServeFile::new(&index_path));
+        app.fallback_service(serve_dir)
+    } else {
+        tracing::info!(
+            "Frontend directory not found at {}, serving API only",
+            frontend_dir
+        );
+        app
+    };
+
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    tracing::info!("Backend server listening on {}", addr);
+    tracing::info!("Server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

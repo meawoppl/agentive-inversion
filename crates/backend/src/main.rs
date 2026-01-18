@@ -65,6 +65,14 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::approve_decision),
         )
         .route("/api/decisions/:id/reject", post(handlers::reject_decision))
+        .route(
+            "/api/decisions/batch/approve",
+            post(handlers::batch_approve_decisions),
+        )
+        .route(
+            "/api/decisions/batch/reject",
+            post(handlers::batch_reject_decisions),
+        )
         // Agent rules routes
         .route("/api/rules", get(handlers::list_agent_rules))
         .route("/api/rules", post(handlers::create_agent_rule))

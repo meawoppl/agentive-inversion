@@ -95,243 +95,262 @@ Agentive Inversion is a personal life management system that consolidates emails
 
 ## 3. System Overview
 
+
 ### High-Level Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              DATA SOURCES                                │
-├─────────────────┬─────────────────┬─────────────────┬───────────────────┤
-│   Gmail API     │  Google Calendar │   Manual Input  │   Future Sources  │
-│   (OAuth2)      │     (OAuth2)     │    (Web UI)     │   (Slack, etc.)   │
-└────────┬────────┴────────┬────────┴────────┬────────┴─────────┬─────────┘
-         │                 │                 │                   │
-         ▼                 ▼                 ▼                   ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           POLLER SERVICES                                │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
-│  │  Email Poller   │  │ Calendar Poller │  │    Future Pollers       │  │
-│  │  (5 min cycle)  │  │  (5 min cycle)  │  │                         │  │
-│  └────────┬────────┘  └────────┬────────┘  └────────────┬────────────┘  │
-└───────────┼─────────────────────┼───────────────────────┼───────────────┘
-            │                     │                       │
-            ▼                     ▼                       ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         POSTGRESQL DATABASE                              │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐  │
-│  │  emails  │ │ calendar │ │  todos   │ │ agent_   │ │ agent_rules  │  │
-│  │          │ │ _events  │ │          │ │ decisions│ │              │  │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────┘  │
-└─────────────────────────────────┬───────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          BACKEND (Axum)                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
-│  │  REST API   │  │   Agent     │  │    Chat     │  │   WebSocket     │ │
-│  │  Endpoints  │  │   Engine    │  │   Handler   │  │   (real-time)   │ │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────┘ │
-└─────────────────────────────────┬───────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (Yew/WASM)                               │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
-│  │   Inbox     │  │    Todo     │  │   Decision  │  │      Chat       │ │
-│  │   Panel     │  │    List     │  │     Log     │  │    Interface    │ │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph sources["DATA SOURCES"]
+        gmail["Gmail API (OAuth2)"]
+        calendar["Google Calendar (OAuth2)"]
+        manual["Manual Input (Web UI)"]
+        future["Future Sources (Slack, etc.)"]
+    end
+
+    subgraph backend["BACKEND (Single Service)"]
+        subgraph tasks["Background Tasks (tokio)"]
+            emailPoller["Email Poller (5 min cycle)"]
+            calendarPoller["Calendar Poller (5 min cycle)"]
+            agentProcessor["Agent Processor (on new items)"]
+        end
+
+        subgraph http["HTTP Server (Axum)"]
+            rest["REST API Endpoints"]
+            chat["Chat Handler"]
+            ws["WebSocket (real-time)"]
+            static["Static Files"]
+        end
+    end
+
+    subgraph db["POSTGRESQL DATABASE"]
+        emails[(emails)]
+        calendarEvents[(calendar_events)]
+        todos[(todos)]
+        decisions[(agent_decisions)]
+        rules[(agent_rules)]
+    end
+
+    gmail --> emailPoller
+    calendar --> calendarPoller
+    manual --> rest
+    future --> rest
+
+    tasks --> db
+    http --> db
 ```
 
 ### Component Summary
 
 | Component | Technology | Responsibility |
 |-----------|------------|----------------|
-| Email Poller | Rust + google-gmail1 | Fetch emails, store raw data, trigger analysis |
-| Calendar Poller | Rust + google-calendar3 | Fetch events, store raw data, trigger analysis |
-| Agent Engine | Rust (+ optional LLM API) | Analyze items, propose actions, apply rules |
-| Backend API | Rust + Axum | REST endpoints, WebSocket, business logic |
+| Backend Service | Rust + Axum + Tokio | Single service: REST API, pollers, agent, static files |
+| Email Polling | Background task (tokio::spawn) | Fetch emails on interval, store in DB, trigger analysis |
+| Calendar Polling | Background task (tokio::spawn) | Fetch events on interval, store in DB, trigger analysis |
+| Agent Engine | In-process | Analyze items, propose actions, apply rules |
 | Frontend | Rust + Yew (WASM) | Dashboard, chat interface, decision review |
 | Database | PostgreSQL (Neon) | Persistent storage for all data |
+
+**Key Design Decision:** All functionality runs in a single process. Email and calendar polling run as background tokio tasks within the same binary as the HTTP server. This simplifies deployment (one container, one process) and allows direct in-memory communication between components.
 
 ---
 
 ## 4. Architecture
 
+
 ### 4.1 Service Architecture
 
+The backend runs as a single service combining HTTP handling with background polling tasks. All components share a database connection pool and can communicate through in-memory channels.
+
+```mermaid
+flowchart TB
+    subgraph process["SINGLE PROCESS (backend)"]
+        subgraph bg["Background Tasks (tokio::spawn)"]
+            ep["Email Poller<br/>5-min interval"]
+            cp["Calendar Poller<br/>5-min interval"]
+        end
+
+        subgraph axum["HTTP Server (Axum)"]
+            rest["REST API :3000"]
+            ws["WebSocket"]
+            agent["Agent Engine"]
+            chat["Chat Handler"]
+        end
+
+        subgraph static["Static Assets"]
+            wasm["Frontend WASM"]
+        end
+    end
+
+    subgraph db["PostgreSQL"]
+        pool["Connection Pool"]
+    end
+
+    ep --> pool
+    cp --> pool
+    rest --> pool
+    agent --> pool
+
+    browser["Browser"] --> rest
+    browser --> ws
+    rest --> wasm
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        PROCESS MODEL                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────────┐     ┌──────────────────┐                  │
-│  │   email-poller   │     │  calendar-poller │                  │
-│  │   (standalone)   │     │   (standalone)   │                  │
-│  └────────┬─────────┘     └────────┬─────────┘                  │
-│           │                        │                             │
-│           │    Direct DB Access    │                             │
-│           ▼                        ▼                             │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    PostgreSQL                             │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│           ▲                        ▲                             │
-│           │                        │                             │
-│           │    Connection Pool     │                             │
-│           │                        │                             │
-│  ┌────────┴────────────────────────┴─────────┐                  │
-│  │                  backend                   │                  │
-│  │          (Axum HTTP Server)                │                  │
-│  │                                            │                  │
-│  │  • REST API (port 3000)                    │                  │
-│  │  • WebSocket endpoint                      │                  │
-│  │  • Agent Engine (in-process)               │                  │
-│  │  • Chat Handler                            │                  │
-│  └────────────────────┬──────────────────────┘                  │
-│                       │                                          │
-│                       │ HTTP / WebSocket                         │
-│                       ▼                                          │
-│  ┌────────────────────────────────────────────┐                  │
-│  │               frontend                      │                  │
-│  │        (Trunk dev server: 8080)             │                  │
-│  │        (Static files in production)         │                  │
-│  └────────────────────────────────────────────┘                  │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+**Development Mode:**
+- Backend serves API on port 3000
+- Trunk dev server serves frontend on port 8080 (hot reload)
+- Background tasks run within the backend process
+
+**Production Mode:**
+- Single Docker container runs the backend binary
+- Frontend is pre-built and served as static files from the backend
+- No separate processes needed
+
 
 ### 4.2 Data Flow
 
 #### Email Processing Flow
 
-```
-┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
-│  Gmail  │───▶│ Poller  │───▶│ emails  │───▶│  Agent  │───▶│decisions│
-│   API   │    │         │    │  table  │    │ Engine  │    │  table  │
-└─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘
-                                                                  │
-                    ┌─────────────────────────────────────────────┘
-                    │
-                    ▼
-              ┌───────────┐         ┌─────────┐         ┌─────────┐
-              │  Frontend │────────▶│ approve │────────▶│  todos  │
-              │  Review   │         │ /reject │         │  table  │
-              └───────────┘         └─────────┘         └─────────┘
-                    │
-                    │ (optional: "always do this")
-                    ▼
-              ┌───────────┐
-              │  rules    │
-              │  table    │
-              └───────────┘
+```mermaid
+flowchart LR
+    gmail["Gmail API"] --> poller["Email Poller"]
+    poller --> emails[(emails table)]
+    emails --> agent["Agent Engine"]
+    agent --> decisions[(decisions table)]
+    decisions --> frontend["Frontend Review"]
+    frontend --> action["approve/reject"]
+    action --> todos[(todos table)]
+    frontend --> rules[(rules table)]
 ```
 
 #### Decision Lifecycle
 
-```
-┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-│ PENDING  │────▶│ PROPOSED │────▶│ APPROVED │────▶│ EXECUTED │
-└──────────┘     └──────────┘     └──────────┘     └──────────┘
-     │                │                                   │
-     │                │                                   │
-     │                ▼                                   │
-     │           ┌──────────┐                            │
-     │           │ REJECTED │                            │
-     │           └──────────┘                            │
-     │                                                    │
-     └──────────────────────────────────────────────────┘
-                  (auto-approved via rule)
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: New item received
+    PENDING --> PROPOSED: Agent analyzes
+    PROPOSED --> APPROVED: User approves
+    PROPOSED --> REJECTED: User rejects
+    APPROVED --> EXECUTED: Action completed
+    PENDING --> EXECUTED: Auto-approved via rule
+    REJECTED --> [*]
+    EXECUTED --> [*]
 ```
 
 ### 4.3 Crate Dependencies
 
+With pollers consolidated into the backend, the dependency graph simplifies:
+
+```mermaid
+flowchart TB
+    shared["shared-types<br/>(data models)"]
+    backend["backend<br/>(API + pollers + agent)"]
+    frontend["frontend<br/>(via API)"]
+
+    shared --> backend
+    shared --> frontend
+    backend -.-> |serves| frontend
 ```
-                    ┌─────────────────┐
-                    │  shared-types   │
-                    │  (data models)  │
-                    └────────┬────────┘
-                             │
-           ┌─────────────────┼─────────────────┐
-           │                 │                 │
-           ▼                 ▼                 ▼
-    ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
-    │   backend   │   │email-poller │   │calendar-poll│
-    │             │   │             │   │             │
-    └──────┬──────┘   └─────────────┘   └─────────────┘
-           │
-           ▼
-    ┌─────────────┐
-    │  frontend   │
-    │  (via API)  │
-    └─────────────┘
-```
+
+**Note:** The `email-poller` and `calendar-poller` crates still exist as library code but are compiled into the backend binary rather than running as separate processes.
 
 ---
 
 ## 5. Data Model
 
+
 ### 5.1 Entity Relationship Diagram
 
+```mermaid
+erDiagram
+    email_accounts ||--o{ emails : has
+    calendar_accounts ||--o{ calendar_events : has
+    emails ||--o{ agent_decisions : generates
+    calendar_events ||--o{ agent_decisions : generates
+    agent_decisions ||--o| todos : creates
+    agent_decisions ||--o| agent_rules : triggers
+    agent_rules ||--o{ agent_decisions : matches
+    todos ||--o| categories : belongs_to
+    todos ||--o{ todos : subtasks
+
+    email_accounts {
+        uuid id PK
+        string account_name
+        string email_address
+        text oauth_refresh_token
+        string sync_status
+    }
+
+    emails {
+        uuid id PK
+        uuid account_id FK
+        string gmail_id
+        string thread_id
+        text subject
+        string from_address
+        text body_text
+        boolean processed
+        timestamp received_at
+    }
+
+    calendar_accounts {
+        uuid id PK
+        string account_name
+        string calendar_id
+        text oauth_refresh_token
+        timestamp last_synced
+    }
+
+    calendar_events {
+        uuid id PK
+        uuid account_id FK
+        string google_event_id
+        text summary
+        timestamp start_time
+        timestamp end_time
+        boolean processed
+    }
+
+    agent_decisions {
+        uuid id PK
+        string source_type
+        uuid source_id FK
+        string decision_type
+        text reasoning
+        float confidence
+        string status
+        uuid result_todo_id FK
+        uuid applied_rule_id FK
+    }
+
+    todos {
+        uuid id PK
+        string title
+        text description
+        boolean completed
+        string source
+        uuid source_id FK
+        timestamp due_date
+        uuid category_id FK
+    }
+
+    agent_rules {
+        uuid id PK
+        string name
+        string rule_type
+        string source_type
+        jsonb conditions
+        string action
+        boolean is_active
+        int match_count
+    }
+
+    categories {
+        uuid id PK
+        string name
+        string color
+    }
 ```
-┌──────────────────┐       ┌──────────────────┐       ┌──────────────────┐
-│  email_accounts  │       │     emails       │       │ calendar_accounts│
-├──────────────────┤       ├──────────────────┤       ├──────────────────┤
-│ id (PK)          │──┐    │ id (PK)          │       │ id (PK)          │
-│ account_name     │  │    │ account_id (FK)  │◀──────│ account_name     │
-│ email_address    │  │    │ gmail_id         │       │ calendar_id      │
-│ oauth_*          │  │    │ thread_id        │       │ oauth_*          │
-│ sync_status      │  │    │ subject          │       │ last_synced      │
-│ ...              │  │    │ from_address     │       │ ...              │
-└──────────────────┘  │    │ body             │       └──────────────────┘
-                      │    │ received_at      │
-                      │    │ processed        │              │
-                      │    │ ...              │              │
-                      │    └────────┬─────────┘              │
-                      │             │                        │
-                      └─────────────┤                        │
-                                    │                        │
-                                    ▼                        ▼
-                      ┌──────────────────────────────────────────┐
-                      │            agent_decisions               │
-                      ├──────────────────────────────────────────┤
-                      │ id (PK)                                  │
-                      │ source_type (email|calendar|manual)      │
-                      │ source_id                                │
-                      │ decision_type                            │
-                      │ reasoning                                │
-                      │ confidence                               │
-                      │ status                                   │
-                      │ result_todo_id (FK)                      │
-                      │ applied_rule_id (FK)                     │
-                      │ ...                                      │
-                      └────────────────┬─────────────────────────┘
-                                       │
-                      ┌────────────────┴────────────────┐
-                      │                                 │
-                      ▼                                 ▼
-            ┌──────────────────┐             ┌──────────────────┐
-            │      todos       │             │   agent_rules    │
-            ├──────────────────┤             ├──────────────────┤
-            │ id (PK)          │             │ id (PK)          │
-            │ title            │             │ name             │
-            │ description      │             │ rule_type        │
-            │ completed        │             │ source_type      │
-            │ source           │             │ pattern          │
-            │ source_id        │             │ action           │
-            │ due_date         │             │ is_active        │
-            │ category_id (FK) │             │ match_count      │
-            │ ...              │             │ ...              │
-            └────────┬─────────┘             └──────────────────┘
-                     │
-                     ▼
-            ┌──────────────────┐
-            │   categories     │
-            ├──────────────────┤
-            │ id (PK)          │
-            │ name             │
-            │ color            │
-            │ ...              │
-            └──────────────────┘
-```
+
 
 ### 5.2 Table Definitions
 
@@ -557,69 +576,42 @@ Add OAuth and sync tracking fields.
 
 ## 6. Email Integration
 
+
 ### 6.1 Email Processing Pipeline
 
+```mermaid
+flowchart TB
+    subgraph stage1["STAGE 1: FETCH"]
+        gmail["Gmail API"] --> poller["Poller Service"]
+        poller --> emails[(emails table)]
+        poller -.-> |"Uses history_id<br/>for incremental sync"| gmail
+        poller --> mark["Marks processed=false"]
+    end
+
+    subgraph stage2["STAGE 2: ANALYZE"]
+        unproc["emails (unprocessed)"] --> agent["Agent Engine"]
+        agent --> decisions[(decisions table)]
+        agent --> rules["Rules Check"]
+        agent --> heuristic["Heuristic + LLM"]
+    end
+
+    subgraph stage3["STAGE 3: REVIEW"]
+        proposed["decisions (proposed)"] --> frontend["Frontend Inbox"]
+        frontend --> user["User Decision"]
+        user --> |"Approve/Reject"| action["Create Rule (optional)"]
+    end
+
+    subgraph stage4["STAGE 4: EXECUTE"]
+        approved["decisions (approved)"] --> executor["Executor"]
+        executor --> todos[(todos created)]
+        executor --> archive["Gmail (archive)"]
+    end
+
+    stage1 --> stage2
+    stage2 --> stage3
+    stage3 --> stage4
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        EMAIL PROCESSING PIPELINE                         │
-└─────────────────────────────────────────────────────────────────────────┘
 
-STAGE 1: FETCH
-══════════════
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Gmail     │────▶│   Poller    │────▶│   emails    │
-│    API      │     │  Service    │     │   table     │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                    Uses history_id for
-                    incremental sync
-                           │
-                           ▼
-                    Marks processed=false
-
-STAGE 2: ANALYZE
-════════════════
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   emails    │────▶│   Agent     │────▶│  decisions  │
-│  (unproc.)  │     │   Engine    │     │   table     │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                    ┌──────┴──────┐
-                    │             │
-                    ▼             ▼
-              ┌─────────┐   ┌─────────┐
-              │  Rules  │   │Heuristic│
-              │  Check  │   │ + LLM   │
-              └─────────┘   └─────────┘
-
-STAGE 3: REVIEW (if needed)
-═══════════════════════════
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  decisions  │────▶│  Frontend   │────▶│   User      │
-│ (proposed)  │     │   Inbox     │     │  Decision   │
-└─────────────┘     └─────────────┘     └─────────────┘
-                                               │
-                                        Approve/Reject
-                                               │
-                                               ▼
-                                        ┌─────────────┐
-                                        │ Create Rule │
-                                        │ (optional)  │
-                                        └─────────────┘
-
-STAGE 4: EXECUTE
-════════════════
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  decisions  │────▶│  Executor   │────▶│   todos     │
-│ (approved)  │     │             │     │ (created)   │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                           ▼
-                    ┌─────────────┐
-                    │   Gmail     │
-                    │  (archive)  │
-                    └─────────────┘
-```
 
 ### 6.2 Agent Analysis Logic
 
@@ -749,90 +741,50 @@ Every decision includes human-readable reasoning:
 }
 ```
 
+
 ### 6.4 Gmail Archive Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     ARCHIVE DECISION FLOW                        │
-└─────────────────────────────────────────────────────────────────┘
-
-User approves "create_todo" decision
-            │
-            ▼
-┌─────────────────────┐
-│ Create todo in DB   │
-└─────────────────────┘
-            │
-            ▼
-┌─────────────────────┐     ┌─────────────────────┐
-│ Should archive      │────▶│ User preference:    │
-│ source email?       │     │ - Always archive    │
-└─────────────────────┘     │ - Ask each time     │
-                            │ - Never archive     │
-                            └─────────────────────┘
-            │
-            ▼ (if archiving)
-┌─────────────────────┐
-│ Add to archive      │
-│ queue               │
-└─────────────────────┘
-            │
-            ▼
-┌─────────────────────┐
-│ Gmail API: Remove   │
-│ INBOX label         │
-└─────────────────────┘
-            │
-            ▼
-┌─────────────────────┐
-│ Mark email as       │
-│ archived_in_gmail   │
-└─────────────────────┘
+```mermaid
+flowchart TB
+    approve["User approves create_todo decision"] --> create["Create todo in DB"]
+    create --> check{"Should archive<br/>source email?"}
+    check --> |"User preference"| prefs["- Always archive<br/>- Ask each time<br/>- Never archive"]
+    check --> |"if archiving"| queue["Add to archive queue"]
+    queue --> gmail["Gmail API: Remove INBOX label"]
+    gmail --> mark["Mark email as archived_in_gmail"]
 ```
 
 ---
 
 ## 7. Calendar Integration
 
+
 ### 7.1 Calendar Event Processing
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      CALENDAR PROCESSING PIPELINE                        │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph fetch["FETCH"]
+        gcal["Google Calendar API"] --> poller["Calendar Poller"]
+        poller --> events[(calendar_events)]
+        poller -.-> |"Uses sync token<br/>for incremental sync"| gcal
+    end
 
-FETCH
-═════
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Google     │────▶│  Calendar   │────▶│  calendar_  │
-│ Calendar API│     │   Poller    │     │   events    │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                    Uses sync token
-                    for incremental sync
+    subgraph analyze["ANALYZE"]
+        direction TB
+        check["For each event, agent considers:"]
+        q1["Is this a meeting I'm attending?"]
+        q2["Does it have action items?"]
+        q3["Is there prep work mentioned?"]
+        q4["Is it a deadline marker?"]
+    end
 
-ANALYZE
-═══════
-For each event, agent considers:
-  • Is this a meeting I'm attending? (not declined)
-  • Does it have action items in description?
-  • Is there prep work mentioned?
-  • Is it a deadline marker?
+    subgraph propose["PROPOSE"]
+        example["Event: Project Review Meeting<br/>Time: Tomorrow 2pm-3pm<br/>Description: Please review the doc"]
+        decision["Proposed Decision:<br/>Type: create_todo<br/>Title: Review doc for meeting<br/>Due: Tomorrow 1pm"]
+    end
 
-PROPOSE
-═══════
-┌─────────────────────────────────────────────────────────────┐
-│ Event: "Project Review Meeting"                              │
-│ Time: Tomorrow 2pm-3pm                                       │
-│ Description: "Please review the attached doc before meeting" │
-├─────────────────────────────────────────────────────────────┤
-│ Proposed Decision:                                           │
-│   Type: create_todo                                          │
-│   Title: "Review doc for Project Review Meeting"             │
-│   Due: Tomorrow 1pm (1 hour before meeting)                  │
-│   Reasoning: "Meeting description contains 'please review',  │
-│              indicating prep work needed"                    │
-└─────────────────────────────────────────────────────────────┘
+    fetch --> analyze
+    analyze --> propose
 ```
 
 ### 7.2 Calendar Event Analysis Signals
@@ -847,138 +799,75 @@ PROPOSE
 
 ### 7.3 Calendar-Todo Sync
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    BIDIRECTIONAL SYNC                            │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph cal2todo["Calendar → Todos"]
+        e1["New event with prep"] --> t1["New todo"]
+        e2["Event time changed"] --> t2["Update todo due date"]
+        e3["Event cancelled"] --> t3["Archive related todo"]
+        e4["Description updated"] --> t4["Update todo description"]
+    end
 
-Calendar → Todos
-════════════════
-• New event with prep work → New todo
-• Event time changed → Update todo due date
-• Event cancelled → Archive related todo
-• Event description updated → Update todo description
-
-Todos → Calendar (Future)
-═════════════════════════
-• Todo with due date → Create calendar block
-• Todo completed → Remove calendar block
-• Todo rescheduled → Update calendar block
+    subgraph todo2cal["Todos → Calendar (Future)"]
+        td1["Todo with due date"] --> c1["Create calendar block"]
+        td2["Todo completed"] --> c2["Remove calendar block"]
+        td3["Todo rescheduled"] --> c3["Update calendar block"]
+    end
 ```
 
 ---
 
 ## 8. Agent Decision System
 
+
 ### 8.1 Confidence Scoring
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CONFIDENCE CALCULATION                        │
-└─────────────────────────────────────────────────────────────────┘
+**Base Score Components:**
 
-Base Score Components:
-══════════════════════
+| Component | Weight |
+|-----------|--------|
+| Rule match | 1.0 (automatic full confidence) |
+| Strong keywords | +0.3 per keyword (max 0.6) |
+| Deadline detected | +0.2 |
+| Known sender | +0.1 |
+| Reply in thread | +0.1 |
+| Automated sender | -0.3 |
+| FYI keywords | -0.2 |
+| LLM agreement | +0.2 if LLM confirms heuristic |
 
-┌─────────────────────┬─────────────────────────────────────────┐
-│ Component           │ Weight                                   │
-├─────────────────────┼─────────────────────────────────────────┤
-│ Rule match          │ 1.0 (automatic full confidence)         │
-│ Strong keywords     │ +0.3 per keyword (max 0.6)              │
-│ Deadline detected   │ +0.2                                    │
-│ Known sender        │ +0.1                                    │
-│ Reply in thread     │ +0.1                                    │
-│ Automated sender    │ -0.3                                    │
-│ FYI keywords        │ -0.2                                    │
-│ LLM agreement       │ +0.2 if LLM confirms heuristic          │
-└─────────────────────┴─────────────────────────────────────────┘
+**Confidence Thresholds:**
 
-Confidence Thresholds:
-══════════════════════
-
-┌─────────────────────┬─────────────────────────────────────────┐
-│ Confidence Range    │ Behavior                                 │
-├─────────────────────┼─────────────────────────────────────────┤
-│ 0.9 - 1.0          │ Auto-approve (if user enables)           │
-│ 0.7 - 0.9          │ Propose with high confidence indicator   │
-│ 0.5 - 0.7          │ Propose with medium confidence           │
-│ 0.3 - 0.5          │ Propose with low confidence, suggest skip│
-│ 0.0 - 0.3          │ Auto-ignore (don't surface to user)      │
-└─────────────────────┴─────────────────────────────────────────┘
-```
+| Confidence Range | Behavior |
+|------------------|----------|
+| 0.9 - 1.0 | Auto-approve (if user enables) |
+| 0.7 - 0.9 | Propose with high confidence indicator |
+| 0.5 - 0.7 | Propose with medium confidence |
+| 0.3 - 0.5 | Propose with low confidence, suggest skip |
+| 0.0 - 0.3 | Auto-ignore (don't surface to user) |
 
 ### 8.2 Rule System
 
 #### Rule Creation Flow
 
+**Option 1: From Decision Approval**
+
+```mermaid
+flowchart TB
+    approve["User approves decision"] --> ask{"Always do this for<br/>similar items?"}
+    ask --> |Yes| suggest["Suggest rule based on:<br/>• Same sender?<br/>• Same subject pattern?<br/>• Same labels?"]
+    suggest --> confirm["User confirms/edits conditions"]
+    confirm --> save["Rule saved and activated"]
+    ask --> |No| done["Done"]
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      RULE CREATION FLOW                          │
-└─────────────────────────────────────────────────────────────────┘
 
-Option 1: From Decision Approval
-════════════════════════════════
+**Option 2: Manual Rule Creation**
 
-User approves decision
-        │
-        ▼
-┌─────────────────────┐
-│ "Always do this for │
-│ similar items?"     │
-│ [Yes] [No]          │
-└─────────────────────┘
-        │ Yes
-        ▼
-┌─────────────────────┐
-│ Suggest rule based  │
-│ on item properties: │
-│ • Same sender?      │
-│ • Same subject pat? │
-│ • Same labels?      │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ User confirms/edits │
-│ rule conditions     │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ Rule saved and      │
-│ activated           │
-└─────────────────────┘
-
-
-Option 2: Manual Rule Creation
-══════════════════════════════
-
-User navigates to Rules settings
-        │
-        ▼
-┌─────────────────────┐
-│ "New Rule" button   │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ Rule Builder UI:    │
-│ • Source type       │
-│ • Conditions        │
-│ • Action            │
-│ • Priority          │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ Test against recent │
-│ items (preview)     │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ Save and activate   │
-└─────────────────────┘
+```mermaid
+flowchart TB
+    nav["User navigates to Rules settings"] --> new["New Rule button"]
+    new --> builder["Rule Builder UI:<br/>• Source type<br/>• Conditions<br/>• Action<br/>• Priority"]
+    builder --> test["Test against recent items (preview)"]
+    test --> activate["Save and activate"]
 ```
 
 #### Example Rules
@@ -1023,44 +912,12 @@ User navigates to Rules settings
 
 ### 8.3 Learning from Feedback
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    FEEDBACK LEARNING LOOP                        │
-└─────────────────────────────────────────────────────────────────┘
-
-User rejects a decision
-        │
-        ▼
-┌─────────────────────┐
-│ "Why was this       │
-│ incorrect?"         │
-│ • Not actionable    │
-│ • Wrong action type │
-│ • Wrong category    │
-│ • Other (explain)   │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ Store feedback with │
-│ decision record     │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ Analyze rejection   │
-│ patterns:           │
-│ • Same sender?      │
-│ • Same keywords?    │
-│ • Same time of day? │
-└─────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│ Suggest rule to     │
-│ prevent future      │
-│ false positives     │
-└─────────────────────┘
+```mermaid
+flowchart TB
+    reject["User rejects a decision"] --> why["Why was this incorrect?<br/>• Not actionable<br/>• Wrong action type<br/>• Wrong category<br/>• Other"]
+    why --> store["Store feedback with decision record"]
+    store --> analyze["Analyze rejection patterns:<br/>• Same sender?<br/>• Same keywords?<br/>• Same time of day?"]
+    analyze --> suggest["Suggest rule to prevent<br/>future false positives"]
 ```
 
 ---

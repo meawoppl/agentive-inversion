@@ -159,8 +159,10 @@ pub async fn start_gmail_oauth(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Build OAuth URL
-    let redirect_uri = std::env::var("OAUTH_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://localhost:3000/api/email-accounts/oauth/callback".to_string());
+    let redirect_uri = std::env::var("OAUTH_REDIRECT_URI").map_err(|_| {
+        tracing::error!("OAUTH_REDIRECT_URI environment variable must be set");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?\
@@ -207,8 +209,10 @@ pub async fn gmail_oauth_callback(
         Err(_) => return Redirect::to("/oauth/error?msg=missing_config").into_response(),
     };
 
-    let redirect_uri = std::env::var("OAUTH_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://localhost:3000/api/email-accounts/oauth/callback".to_string());
+    let redirect_uri = match std::env::var("OAUTH_REDIRECT_URI") {
+        Ok(uri) => uri,
+        Err(_) => return Redirect::to("/oauth/error?msg=missing_redirect_uri").into_response(),
+    };
 
     // Exchange code for tokens using reqwest
     #[derive(Serialize)]

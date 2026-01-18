@@ -20,7 +20,7 @@ use crate::db::{
     agent_rules, calendar_accounts, calendar_events, categories, chat_messages, decisions,
     email_accounts, emails, todos, DbPool,
 };
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 
 // Todo handlers
 pub async fn list_todos(State(pool): State<DbPool>) -> ApiResult<Json<Vec<Todo>>> {
@@ -78,34 +78,19 @@ pub async fn delete_todo(
 // Email account handlers
 pub async fn list_email_accounts(
     State(pool): State<DbPool>,
-) -> Result<Json<Vec<EmailAccountResponse>>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let accounts = email_accounts::list_all(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<Json<Vec<EmailAccountResponse>>> {
+    let mut conn = pool.get().await?;
+    let accounts = email_accounts::list_all(&mut conn).await?;
     let responses: Vec<EmailAccountResponse> = accounts.into_iter().map(Into::into).collect();
-
     Ok(Json(responses))
 }
 
 pub async fn delete_email_account(
     State(pool): State<DbPool>,
     Path(account_id): Path<Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    email_accounts::delete(&mut conn, account_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<StatusCode> {
+    let mut conn = pool.get().await?;
+    email_accounts::delete(&mut conn, account_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -119,15 +104,11 @@ pub struct OAuthStartResponse {
 pub async fn start_gmail_oauth(
     State(pool): State<DbPool>,
     Json(payload): Json<ConnectEmailAccountRequest>,
-) -> Result<Json<OAuthStartResponse>, StatusCode> {
+) -> ApiResult<Json<OAuthStartResponse>> {
     let client_id =
-        std::env::var("GOOGLE_CLIENT_ID").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        std::env::var("GOOGLE_CLIENT_ID").map_err(|_| ApiError::missing_env("GOOGLE_CLIENT_ID"))?;
 
-    // Create a placeholder email account to track this connection
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut conn = pool.get().await?;
 
     let account = email_accounts::create(
         &mut conn,
@@ -135,14 +116,10 @@ pub async fn start_gmail_oauth(
         "pending@oauth.flow", // Temporary email until OAuth completes
         "gmail",
     )
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .await?;
 
-    // Build OAuth URL
-    let redirect_uri = std::env::var("OAUTH_REDIRECT_URI").map_err(|_| {
-        tracing::error!("OAUTH_REDIRECT_URI environment variable must be set");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let redirect_uri = std::env::var("OAUTH_REDIRECT_URI")
+        .map_err(|_| ApiError::missing_env("OAUTH_REDIRECT_URI"))?;
 
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?\
@@ -341,29 +318,15 @@ pub async fn delete_category(
 pub async fn list_emails(
     State(pool): State<DbPool>,
     Query(query): Query<EmailListQuery>,
-) -> Result<Json<Vec<EmailResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<Vec<EmailResponse>>> {
+    let mut conn = pool.get().await?;
     let limit = query.limit.or(Some(50));
     let offset = query.offset;
 
     let items = if let Some(acc_id) = query.account_id {
-        emails::list_by_account(&mut conn, acc_id, limit)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to list emails: {:?}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
+        emails::list_by_account(&mut conn, acc_id, limit).await?
     } else {
-        emails::list_all(&mut conn, limit, offset)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to list emails: {:?}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
+        emails::list_all(&mut conn, limit, offset).await?
     };
 
     let responses: Vec<EmailResponse> = items
@@ -391,16 +354,9 @@ pub async fn list_emails(
 pub async fn get_email(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
-) -> Result<Json<EmailResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let email = emails::get_by_id(&mut conn, id).await.map_err(|e| {
-        tracing::error!("Failed to get email: {:?}", e);
-        StatusCode::NOT_FOUND
-    })?;
+) -> ApiResult<Json<EmailResponse>> {
+    let mut conn = pool.get().await?;
+    let email = emails::get_by_id(&mut conn, id).await?;
 
     Ok(Json(EmailResponse {
         id: email.id,
@@ -425,24 +381,10 @@ pub struct EmailStatsResponse {
     pub unprocessed: i64,
 }
 
-pub async fn get_email_stats(
-    State(pool): State<DbPool>,
-) -> Result<Json<EmailStatsResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let total = emails::count_all(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to count emails: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let unprocessed = emails::count_unprocessed(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to count unprocessed emails: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+pub async fn get_email_stats(State(pool): State<DbPool>) -> ApiResult<Json<EmailStatsResponse>> {
+    let mut conn = pool.get().await?;
+    let total = emails::count_all(&mut conn).await?;
+    let unprocessed = emails::count_unprocessed(&mut conn).await?;
     Ok(Json(EmailStatsResponse { total, unprocessed }))
 }
 
@@ -459,23 +401,16 @@ pub struct DecisionListParams {
 pub async fn list_decisions(
     State(pool): State<DbPool>,
     Query(params): Query<DecisionListParams>,
-) -> Result<Json<Vec<AgentDecisionResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+) -> ApiResult<Json<Vec<AgentDecisionResponse>>> {
+    let mut conn = pool.get().await?;
 
     let items = if let Some(status) = params.status {
-        decisions::list_by_status(&mut conn, &status).await
+        decisions::list_by_status(&mut conn, &status).await?
     } else if let Some(source_type) = params.source_type {
-        decisions::list_by_source(&mut conn, &source_type).await
+        decisions::list_by_source(&mut conn, &source_type).await?
     } else {
-        decisions::list_all(&mut conn).await
-    }
-    .map_err(|e| {
-        tracing::error!("Failed to list decisions: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+        decisions::list_all(&mut conn).await?
+    };
 
     let responses: Vec<AgentDecisionResponse> = items.into_iter().map(Into::into).collect();
     Ok(Json(responses))
@@ -483,17 +418,9 @@ pub async fn list_decisions(
 
 pub async fn list_pending_decisions(
     State(pool): State<DbPool>,
-) -> Result<Json<Vec<AgentDecisionResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let items = decisions::list_pending(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to list pending decisions: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<Vec<AgentDecisionResponse>>> {
+    let mut conn = pool.get().await?;
+    let items = decisions::list_pending(&mut conn).await?;
     let responses: Vec<AgentDecisionResponse> = items.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
@@ -501,29 +428,17 @@ pub async fn list_pending_decisions(
 pub async fn get_decision(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
-) -> Result<Json<AgentDecisionResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let decision = decisions::get_by_id(&mut conn, id).await.map_err(|e| {
-        tracing::error!("Failed to get decision: {:?}", e);
-        StatusCode::NOT_FOUND
-    })?;
-
+) -> ApiResult<Json<AgentDecisionResponse>> {
+    let mut conn = pool.get().await?;
+    let decision = decisions::get_by_id(&mut conn, id).await?;
     Ok(Json(decision.into()))
 }
 
 pub async fn create_decision(
     State(pool): State<DbPool>,
     Json(payload): Json<CreateAgentDecisionRequest>,
-) -> Result<Json<AgentDecisionResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+) -> ApiResult<Json<AgentDecisionResponse>> {
+    let mut conn = pool.get().await?;
     let decision = decisions::create(
         &mut conn,
         &payload.source_type,
@@ -535,12 +450,7 @@ pub async fn create_decision(
         payload.reasoning_details,
         payload.confidence,
     )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create decision: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+    .await?;
     Ok(Json(decision.into()))
 }
 
@@ -548,17 +458,11 @@ pub async fn approve_decision(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
     Json(payload): Json<ApproveDecisionRequest>,
-) -> Result<Json<AgentDecisionResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> ApiResult<Json<AgentDecisionResponse>> {
+    let mut conn = pool.get().await?;
 
     // Get the decision first
-    let decision = decisions::get_by_id(&mut conn, id).await.map_err(|e| {
-        tracing::error!("Failed to get decision: {:?}", e);
-        StatusCode::NOT_FOUND
-    })?;
+    let decision = decisions::get_by_id(&mut conn, id).await?;
 
     // If decision type is create_todo, create the todo
     let todo_id = if decision.decision_type == "create_todo" {
@@ -566,10 +470,7 @@ pub async fn approve_decision(
         let action: ProposedTodoAction = if let Some(mods) = payload.modifications {
             mods
         } else {
-            serde_json::from_str(&decision.proposed_action).map_err(|e| {
-                tracing::error!("Failed to parse proposed_action: {:?}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
+            serde_json::from_str(&decision.proposed_action)?
         };
 
         let todo = todos::create(
@@ -580,11 +481,7 @@ pub async fn approve_decision(
             None, // link
             action.category_id,
         )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to create todo from decision: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .await?;
 
         Some(todo.id)
     } else {
@@ -592,19 +489,11 @@ pub async fn approve_decision(
     };
 
     // Update the decision status
-    let updated = decisions::approve(&mut conn, id, todo_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to approve decision: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let updated = decisions::approve(&mut conn, id, todo_id).await?;
 
     // Mark as executed since we've already created the todo
     let final_decision = if todo_id.is_some() {
-        decisions::mark_executed(&mut conn, id).await.map_err(|e| {
-            tracing::error!("Failed to mark decision as executed: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
+        decisions::mark_executed(&mut conn, id).await?
     } else {
         updated
     };
@@ -616,46 +505,23 @@ pub async fn reject_decision(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
     Json(payload): Json<RejectDecisionRequest>,
-) -> Result<Json<AgentDecisionResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let decision = decisions::reject(&mut conn, id, payload.feedback.as_deref())
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to reject decision: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
+) -> ApiResult<Json<AgentDecisionResponse>> {
+    let mut conn = pool.get().await?;
+    let decision = decisions::reject(&mut conn, id, payload.feedback.as_deref()).await?;
     Ok(Json(decision.into()))
 }
 
-pub async fn get_decision_stats(
-    State(pool): State<DbPool>,
-) -> Result<Json<DecisionStats>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let stats = decisions::get_stats(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to get decision stats: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+pub async fn get_decision_stats(State(pool): State<DbPool>) -> ApiResult<Json<DecisionStats>> {
+    let mut conn = pool.get().await?;
+    let stats = decisions::get_stats(&mut conn).await?;
     Ok(Json(stats))
 }
 
 pub async fn batch_approve_decisions(
     State(pool): State<DbPool>,
     Json(payload): Json<BatchApproveDecisionsRequest>,
-) -> Result<Json<BatchOperationResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> ApiResult<Json<BatchOperationResponse>> {
+    let mut conn = pool.get().await?;
 
     let mut successful = Vec::new();
     let mut failed = Vec::new();
@@ -733,11 +599,8 @@ pub async fn batch_approve_decisions(
 pub async fn batch_reject_decisions(
     State(pool): State<DbPool>,
     Json(payload): Json<BatchRejectDecisionsRequest>,
-) -> Result<Json<BatchOperationResponse>, StatusCode> {
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> ApiResult<Json<BatchOperationResponse>> {
+    let mut conn = pool.get().await?;
 
     let mut successful = Vec::new();
     let mut failed = Vec::new();
@@ -759,29 +622,15 @@ pub async fn batch_reject_decisions(
 pub async fn list_agent_rules(
     State(pool): State<DbPool>,
     Query(query): Query<RuleListQuery>,
-) -> Result<Json<Vec<AgentRuleResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+) -> ApiResult<Json<Vec<AgentRuleResponse>>> {
+    let mut conn = pool.get().await?;
 
     let rules = if let Some(source) = &query.source_type {
-        agent_rules::list_by_source_type(&mut conn, source)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to list agent rules: {:?}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
+        agent_rules::list_by_source_type(&mut conn, source).await?
     } else if query.is_active == Some(true) {
-        agent_rules::list_active(&mut conn).await.map_err(|e| {
-            tracing::error!("Failed to list agent rules: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
+        agent_rules::list_active(&mut conn).await?
     } else {
-        agent_rules::list_all(&mut conn).await.map_err(|e| {
-            tracing::error!("Failed to list agent rules: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
+        agent_rules::list_all(&mut conn).await?
     };
 
     let responses: Vec<AgentRuleResponse> = rules
@@ -795,46 +644,21 @@ pub async fn list_agent_rules(
 pub async fn get_agent_rule(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
-) -> Result<Json<AgentRuleResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let rule = agent_rules::get_by_id(&mut conn, id).await.map_err(|e| {
-        tracing::error!("Failed to get agent rule: {:?}", e);
-        StatusCode::NOT_FOUND
-    })?;
-
-    let response: AgentRuleResponse = rule.try_into().map_err(|e| {
-        tracing::error!("Failed to parse agent rule: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<AgentRuleResponse>> {
+    let mut conn = pool.get().await?;
+    let rule = agent_rules::get_by_id(&mut conn, id).await?;
+    let response: AgentRuleResponse = rule.try_into()?;
     Ok(Json(response))
 }
 
 pub async fn create_agent_rule(
     State(pool): State<DbPool>,
     Json(payload): Json<CreateAgentRuleRequest>,
-) -> Result<Json<AgentRuleResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+) -> ApiResult<Json<AgentRuleResponse>> {
+    let mut conn = pool.get().await?;
 
-    let rule = agent_rules::create(&mut conn, &payload)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to create agent rule: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    let response: AgentRuleResponse = rule.try_into().map_err(|e| {
-        tracing::error!("Failed to parse agent rule: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+    let rule = agent_rules::create(&mut conn, &payload).await?;
+    let response: AgentRuleResponse = rule.try_into()?;
     Ok(Json(response))
 }
 
@@ -842,12 +666,8 @@ pub async fn update_agent_rule(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateAgentRuleRequest>,
-) -> Result<Json<AgentRuleResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<AgentRuleResponse>> {
+    let mut conn = pool.get().await?;
     let rule = agent_rules::update(
         &mut conn,
         id,
@@ -861,34 +681,17 @@ pub async fn update_agent_rule(
         payload.priority,
         payload.is_active,
     )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to update agent rule: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let response: AgentRuleResponse = rule.try_into().map_err(|e| {
-        tracing::error!("Failed to parse agent rule: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+    .await?;
+    let response: AgentRuleResponse = rule.try_into()?;
     Ok(Json(response))
 }
 
 pub async fn delete_agent_rule(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    agent_rules::delete(&mut conn, id).await.map_err(|e| {
-        tracing::error!("Failed to delete agent rule: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<StatusCode> {
+    let mut conn = pool.get().await?;
+    agent_rules::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -901,26 +704,11 @@ pub struct ToggleActiveResponse {
 pub async fn toggle_agent_rule_active(
     State(pool): State<DbPool>,
     Path(id): Path<Uuid>,
-) -> Result<Json<ToggleActiveResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+) -> ApiResult<Json<ToggleActiveResponse>> {
+    let mut conn = pool.get().await?;
+    let current = agent_rules::get_by_id(&mut conn, id).await?;
 
-    // Get current state
-    let current = agent_rules::get_by_id(&mut conn, id).await.map_err(|e| {
-        tracing::error!("Failed to get agent rule: {:?}", e);
-        StatusCode::NOT_FOUND
-    })?;
-
-    // Toggle it
-    let updated = agent_rules::set_active(&mut conn, id, !current.is_active)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to toggle agent rule: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
+    let updated = agent_rules::set_active(&mut conn, id, !current.is_active).await?;
     Ok(Json(ToggleActiveResponse {
         id: updated.id,
         is_active: updated.is_active,
@@ -934,19 +722,9 @@ pub async fn toggle_agent_rule_active(
 pub async fn get_chat_history(
     State(pool): State<DbPool>,
     Query(query): Query<ChatHistoryQuery>,
-) -> Result<Json<Vec<ChatMessageResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let messages = chat_messages::list_history(&mut conn, query.limit, query.before)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get chat history: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
+) -> ApiResult<Json<Vec<ChatMessageResponse>>> {
+    let mut conn = pool.get().await?;
+    let messages = chat_messages::list_history(&mut conn, query.limit, query.before).await?;
     let responses: Vec<ChatMessageResponse> = messages.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
@@ -954,22 +732,14 @@ pub async fn get_chat_history(
 pub async fn send_chat_message(
     State(pool): State<DbPool>,
     Json(payload): Json<SendChatMessageRequest>,
-) -> Result<Json<ChatResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+) -> ApiResult<Json<ChatResponse>> {
+    let mut conn = pool.get().await?;
 
     // Detect intent from the message content
     let (detected_intent, suggested_actions) = classify_intent(&payload.content, &mut conn).await;
 
     // Save the user's message
-    let _user_message = chat_messages::create(&mut conn, "user", &payload.content, None)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to save user message: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    chat_messages::create(&mut conn, "user", &payload.content, None).await?;
 
     // Generate assistant response based on intent
     let assistant_response = generate_response(&detected_intent, &payload.content, &mut conn).await;
@@ -981,11 +751,7 @@ pub async fn send_chat_message(
         &assistant_response,
         Some(detected_intent.as_str()),
     )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to save assistant message: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    .await?;
 
     Ok(Json(ChatResponse {
         message: assistant_message.into(),
@@ -994,17 +760,10 @@ pub async fn send_chat_message(
     }))
 }
 
-pub async fn clear_chat_history(State(pool): State<DbPool>) -> Result<StatusCode, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+pub async fn clear_chat_history(State(pool): State<DbPool>) -> ApiResult<StatusCode> {
+    let mut conn = pool.get().await?;
 
-    chat_messages::delete_all(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to clear chat history: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+    chat_messages::delete_all(&mut conn).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1188,12 +947,8 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 pub async fn list_calendar_events(
     State(pool): State<DbPool>,
     Query(params): Query<CalendarEventQuery>,
-) -> Result<Json<Vec<CalendarEventResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<Vec<CalendarEventResponse>>> {
+    let mut conn = pool.get().await?;
     let events = calendar_events::list_events(
         &mut conn,
         params.account_id,
@@ -1202,12 +957,7 @@ pub async fn list_calendar_events(
         params.processed,
         params.limit,
     )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to list calendar events: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+    .await?;
     let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
@@ -1215,55 +965,28 @@ pub async fn list_calendar_events(
 pub async fn get_calendar_event(
     State(pool): State<DbPool>,
     Path(event_id): Path<Uuid>,
-) -> Result<Json<CalendarEventResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<CalendarEventResponse>> {
+    let mut conn = pool.get().await?;
     let event = calendar_events::get_by_id(&mut conn, event_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get calendar event: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
+        .await?
+        .ok_or_else(|| ApiError::not_found("Calendar event"))?;
     Ok(Json(event.into()))
 }
 
 pub async fn get_todays_events(
     State(pool): State<DbPool>,
-) -> Result<Json<Vec<CalendarEventResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let events = calendar_events::get_today(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to get today's events: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<Vec<CalendarEventResponse>>> {
+    let mut conn = pool.get().await?;
+    let events = calendar_events::get_today(&mut conn).await?;
     let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
 
 pub async fn get_this_weeks_events(
     State(pool): State<DbPool>,
-) -> Result<Json<Vec<CalendarEventResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let events = calendar_events::get_this_week(&mut conn)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get this week's events: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
+) -> ApiResult<Json<Vec<CalendarEventResponse>>> {
+    let mut conn = pool.get().await?;
+    let events = calendar_events::get_this_week(&mut conn).await?;
     let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
@@ -1303,17 +1026,9 @@ impl From<shared_types::CalendarAccount> for CalendarAccountResponse {
 
 pub async fn list_calendar_accounts(
     State(pool): State<DbPool>,
-) -> Result<Json<Vec<CalendarAccountResponse>>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let accounts = calendar_accounts::list(&mut conn).await.map_err(|e| {
-        tracing::error!("Failed to list calendar accounts: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<Vec<CalendarAccountResponse>>> {
+    let mut conn = pool.get().await?;
+    let accounts = calendar_accounts::list(&mut conn).await?;
     let responses: Vec<CalendarAccountResponse> = accounts.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
@@ -1321,71 +1036,40 @@ pub async fn list_calendar_accounts(
 pub async fn create_calendar_account(
     State(pool): State<DbPool>,
     Json(payload): Json<CreateCalendarAccountRequest>,
-) -> Result<Json<CalendarAccountResponse>, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+) -> ApiResult<Json<CalendarAccountResponse>> {
+    let mut conn = pool.get().await?;
     let account = calendar_accounts::create(
         &mut conn,
         &payload.account_name,
         &payload.calendar_id,
         payload.email_address.as_deref(),
     )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create calendar account: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+    .await?;
     Ok(Json(account.into()))
 }
 
 pub async fn delete_calendar_account(
     State(pool): State<DbPool>,
     Path(account_id): Path<Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    calendar_accounts::delete(&mut conn, account_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to delete calendar account: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
+) -> ApiResult<StatusCode> {
+    let mut conn = pool.get().await?;
+    calendar_accounts::delete(&mut conn, account_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn toggle_calendar_account(
     State(pool): State<DbPool>,
     Path(account_id): Path<Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    let mut conn = pool.get().await.map_err(|e| {
-        tracing::error!("Failed to get db connection: {:?}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+) -> ApiResult<StatusCode> {
+    let mut conn = pool.get().await?;
 
     // Get current state
     let account = calendar_accounts::get_by_id(&mut conn, account_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get calendar account: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .await?
+        .ok_or_else(|| ApiError::not_found("Calendar account"))?;
 
     // Toggle active state
-    calendar_accounts::set_active(&mut conn, account_id, !account.is_active)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to toggle calendar account: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    calendar_accounts::set_active(&mut conn, account_id, !account.is_active).await?;
 
     Ok(StatusCode::OK)
 }

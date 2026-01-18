@@ -1,7 +1,10 @@
 use chrono::{DateTime, Datelike, Utc};
 use diesel::prelude::*;
 use diesel_async::{
-    pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager, ManagerConfig},
+    pooled_connection::{
+        deadpool::{Object, Pool},
+        AsyncDieselConnectionManager, ManagerConfig,
+    },
     AsyncPgConnection, RunQueryDsl,
 };
 use shared_types::{
@@ -9,9 +12,34 @@ use shared_types::{
 };
 use uuid::Uuid;
 
+use crate::error::ApiError;
 use crate::models::{AgentDecisionRow, AgentRuleChanges, NewEmail, TodoChanges};
 
 pub type DbPool = Pool<AsyncPgConnection>;
+
+/// Type alias for connection objects returned from the pool.
+///
+/// This type is used throughout the handlers to work with database connections.
+pub type DbConn = Object<AsyncPgConnection>;
+
+/// Get a connection from the pool with automatic error handling.
+///
+/// This helper centralizes connection pool access, providing a single point for:
+/// - Automatic error conversion to ApiError
+/// - Future metrics/logging hooks
+/// - Connection timeout configuration
+///
+/// Returns an ApiError::ConnectionPool on failure, which maps to
+/// HTTP 503 Service Unavailable.
+///
+/// # Example
+/// ```ignore
+/// let mut conn = get_conn(&pool).await?;
+/// todos::list_all(&mut conn).await?
+/// ```
+pub async fn get_conn(pool: &DbPool) -> Result<DbConn, ApiError> {
+    pool.get().await.map_err(ApiError::from)
+}
 
 async fn establish_tls_connection(config: String) -> diesel::ConnectionResult<AsyncPgConnection> {
     // Set up rustls TLS configuration

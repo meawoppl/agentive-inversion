@@ -70,3 +70,32 @@ pub struct NewEmail {
     pub has_attachments: bool,
     pub received_at: DateTime<Utc>,
 }
+
+/// Changeset for updating todos in a single query
+#[derive(Debug, Clone, Default, AsChangeset)]
+#[diesel(table_name = crate::schema::todos)]
+pub struct TodoChanges {
+    pub title: Option<String>,
+    pub description: Option<Option<String>>,
+    pub completed: Option<bool>,
+    pub due_date: Option<Option<DateTime<Utc>>>,
+    pub link: Option<Option<String>>,
+    pub category_id: Option<Option<Uuid>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Changeset for updating agent rules in a single query
+#[derive(Debug, Clone, Default, AsChangeset)]
+#[diesel(table_name = crate::schema::agent_rules)]
+pub struct AgentRuleChanges {
+    pub name: Option<String>,
+    pub description: Option<Option<String>>,
+    pub source_type: Option<String>,
+    pub rule_type: Option<String>,
+    pub conditions: Option<String>,
+    pub action: Option<String>,
+    pub action_params: Option<Option<String>>,
+    pub priority: Option<i32>,
+    pub is_active: Option<bool>,
+    pub updated_at: Option<DateTime<Utc>>,
+}

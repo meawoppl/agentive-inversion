@@ -9,6 +9,15 @@ on:
 # - Migrations run automatically on container startup via entrypoint
 # - Migrations are tracked in __diesel_schema_migrations table
 # - For manual migration: docker exec <container> diesel migration run
+#
+# Required environment variables for the container:
+#   DATABASE_URL          - PostgreSQL connection string
+#   JWT_SECRET            - Secret for signing auth cookies (openssl rand -hex 32)
+#   ALLOWED_EMAILS        - Comma-separated list of authorized user emails
+#   GOOGLE_CLIENT_ID      - Google OAuth client ID
+#   GOOGLE_CLIENT_SECRET  - Google OAuth client secret
+#   AUTH_REDIRECT_URI     - OAuth callback for user login
+#   OAUTH_REDIRECT_URI    - OAuth callback for Gmail API
 
 jobs:
   deploy:

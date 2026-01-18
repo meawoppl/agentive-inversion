@@ -1,14 +1,16 @@
 use axum::{
     http::{header, Method, StatusCode},
+    middleware,
     routing::{delete, get, post, put},
     Router,
 };
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     services::{ServeDir, ServeFile},
 };
 
+mod auth;
 mod db;
 pub mod error;
 mod handlers;
@@ -18,6 +20,15 @@ pub mod repository;
 mod schema;
 mod services;
 
+use auth::types::AuthConfig;
+
+/// Application state shared across all handlers
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: db::DbPool,
+    pub auth_config: Arc<AuthConfig>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -26,6 +37,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Establish database connection pool
     let pool = db::establish_connection_pool()?;
+
+    // Load auth configuration once at startup
+    let auth_config =
+        Arc::new(AuthConfig::from_env().map_err(|e| anyhow::anyhow!("Auth config error: {}", e))?);
+    tracing::info!(
+        "Auth configured for {} allowed email(s)",
+        auth_config.allowed_emails.len()
+    );
+
+    let app_state = AppState {
+        pool: pool.clone(),
+        auth_config,
+    };
 
     // Start email polling background task
     let email_poll_pool = pool.clone();
@@ -39,103 +63,101 @@ async fn main() -> anyhow::Result<()> {
         pollers::start_calendar_polling_task(calendar_poll_pool).await;
     });
 
-    let app = Router::new()
-        .route("/health", get(health_check))
+    // Protected API routes (require authentication)
+    let protected_routes = Router::new()
         // Todo routes
-        .route("/api/todos", get(handlers::list_todos))
-        .route("/api/todos", post(handlers::create_todo))
-        .route("/api/todos/:id", put(handlers::update_todo))
-        .route("/api/todos/:id", delete(handlers::delete_todo))
+        .route("/todos", get(handlers::list_todos))
+        .route("/todos", post(handlers::create_todo))
+        .route("/todos/:id", put(handlers::update_todo))
+        .route("/todos/:id", delete(handlers::delete_todo))
         // Email account routes
-        .route("/api/email-accounts", get(handlers::list_email_accounts))
-        .route("/api/email-accounts", post(handlers::start_gmail_oauth))
+        .route("/email-accounts", get(handlers::list_email_accounts))
+        .route("/email-accounts", post(handlers::start_gmail_oauth))
         .route(
-            "/api/email-accounts/:id",
+            "/email-accounts/:id",
             delete(handlers::delete_email_account),
         )
-        // OAuth routes
         .route(
-            "/api/email-accounts/oauth/callback",
+            "/email-accounts/oauth/callback",
             get(handlers::gmail_oauth_callback),
         )
         // Category routes
-        .route("/api/categories", get(handlers::list_categories))
-        .route("/api/categories", post(handlers::create_category))
-        .route("/api/categories/:id", put(handlers::update_category))
-        .route("/api/categories/:id", delete(handlers::delete_category))
+        .route("/categories", get(handlers::list_categories))
+        .route("/categories", post(handlers::create_category))
+        .route("/categories/:id", put(handlers::update_category))
+        .route("/categories/:id", delete(handlers::delete_category))
         // Email routes
-        .route("/api/emails", get(handlers::list_emails))
-        .route("/api/emails/stats", get(handlers::get_email_stats))
-        .route("/api/emails/:id", get(handlers::get_email))
+        .route("/emails", get(handlers::list_emails))
+        .route("/emails/stats", get(handlers::get_email_stats))
+        .route("/emails/:id", get(handlers::get_email))
         // Agent decision routes
-        .route("/api/decisions", get(handlers::list_decisions))
-        .route("/api/decisions", post(handlers::create_decision))
+        .route("/decisions", get(handlers::list_decisions))
+        .route("/decisions", post(handlers::create_decision))
+        .route("/decisions/pending", get(handlers::list_pending_decisions))
+        .route("/decisions/stats", get(handlers::get_decision_stats))
+        .route("/decisions/:id", get(handlers::get_decision))
+        .route("/decisions/:id/approve", post(handlers::approve_decision))
+        .route("/decisions/:id/reject", post(handlers::reject_decision))
         .route(
-            "/api/decisions/pending",
-            get(handlers::list_pending_decisions),
-        )
-        .route("/api/decisions/stats", get(handlers::get_decision_stats))
-        .route("/api/decisions/:id", get(handlers::get_decision))
-        .route(
-            "/api/decisions/:id/approve",
-            post(handlers::approve_decision),
-        )
-        .route("/api/decisions/:id/reject", post(handlers::reject_decision))
-        .route(
-            "/api/decisions/batch/approve",
+            "/decisions/batch/approve",
             post(handlers::batch_approve_decisions),
         )
         .route(
-            "/api/decisions/batch/reject",
+            "/decisions/batch/reject",
             post(handlers::batch_reject_decisions),
         )
         // Agent rules routes
-        .route("/api/rules", get(handlers::list_agent_rules))
-        .route("/api/rules", post(handlers::create_agent_rule))
-        .route("/api/rules/:id", get(handlers::get_agent_rule))
-        .route("/api/rules/:id", put(handlers::update_agent_rule))
-        .route("/api/rules/:id", delete(handlers::delete_agent_rule))
+        .route("/rules", get(handlers::list_agent_rules))
+        .route("/rules", post(handlers::create_agent_rule))
+        .route("/rules/:id", get(handlers::get_agent_rule))
+        .route("/rules/:id", put(handlers::update_agent_rule))
+        .route("/rules/:id", delete(handlers::delete_agent_rule))
         .route(
-            "/api/rules/:id/toggle",
+            "/rules/:id/toggle",
             post(handlers::toggle_agent_rule_active),
         )
         // Chat routes
-        .route("/api/chat", post(handlers::send_chat_message))
-        .route("/api/chat/history", get(handlers::get_chat_history))
-        .route("/api/chat/history", delete(handlers::clear_chat_history))
+        .route("/chat", post(handlers::send_chat_message))
+        .route("/chat/history", get(handlers::get_chat_history))
+        .route("/chat/history", delete(handlers::clear_chat_history))
         // Calendar event routes
-        .route("/api/calendar-events", get(handlers::list_calendar_events))
+        .route("/calendar-events", get(handlers::list_calendar_events))
+        .route("/calendar-events/today", get(handlers::get_todays_events))
         .route(
-            "/api/calendar-events/today",
-            get(handlers::get_todays_events),
-        )
-        .route(
-            "/api/calendar-events/week",
+            "/calendar-events/week",
             get(handlers::get_this_weeks_events),
         )
-        .route(
-            "/api/calendar-events/:id",
-            get(handlers::get_calendar_event),
-        )
+        .route("/calendar-events/:id", get(handlers::get_calendar_event))
         // Calendar account routes
+        .route("/calendar-accounts", get(handlers::list_calendar_accounts))
         .route(
-            "/api/calendar-accounts",
-            get(handlers::list_calendar_accounts),
-        )
-        .route(
-            "/api/calendar-accounts",
+            "/calendar-accounts",
             post(handlers::create_calendar_account),
         )
         .route(
-            "/api/calendar-accounts/:id",
+            "/calendar-accounts/:id",
             delete(handlers::delete_calendar_account),
         )
         .route(
-            "/api/calendar-accounts/:id/toggle",
+            "/calendar-accounts/:id/toggle",
             post(handlers::toggle_calendar_account),
         )
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::require_auth,
+        ));
+
+    let app = Router::new()
+        .route("/health", get(health_check))
+        // Public auth routes
+        .route("/api/auth/login", get(auth::auth_login))
+        .route("/api/auth/callback", get(auth::auth_callback))
+        .route("/api/auth/logout", post(auth::auth_logout))
+        .route("/api/auth/me", get(auth::auth_me))
+        // Mount protected routes under /api
+        .nest("/api", protected_routes)
         .layer(build_cors_layer())
-        .with_state(pool);
+        .with_state(app_state);
 
     // Serve static frontend files if the directory exists
     let frontend_dir =

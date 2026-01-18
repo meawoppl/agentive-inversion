@@ -1507,3 +1507,20 @@ pub struct ChatHistoryQuery {
     pub limit: Option<i64>,
     pub before: Option<DateTime<Utc>>,
 }
+
+// ============================================================================
+// Authentication Types
+// ============================================================================
+
+/// Response from /api/auth/me endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthUserResponse {
+    pub email: String,
+    pub name: Option<String>,
+}
+
+/// Response from /api/auth/login endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginInitResponse {
+    pub auth_url: String,
+}

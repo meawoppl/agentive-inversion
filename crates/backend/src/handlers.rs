@@ -15,25 +15,27 @@ use shared_types::{
 };
 use uuid::Uuid;
 
+// Authentication is handled by middleware layer in main.rs
 use crate::db::{
     agent_rules, calendar_accounts, calendar_events, categories, chat_messages, decisions,
-    email_accounts, emails, get_conn, todos, DbPool,
+    email_accounts, emails, get_conn, todos,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::services::DecisionService;
+use crate::AppState;
 
 // Todo handlers
-pub async fn list_todos(State(pool): State<DbPool>) -> ApiResult<Json<Vec<Todo>>> {
-    let mut conn = get_conn(&pool).await?;
+pub async fn list_todos(State(state): State<AppState>) -> ApiResult<Json<Vec<Todo>>> {
+    let mut conn = get_conn(&state.pool).await?;
     let items = todos::list_all(&mut conn).await?;
     Ok(Json(items))
 }
 
 pub async fn create_todo(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<CreateTodoRequest>,
 ) -> ApiResult<Json<Todo>> {
-    let mut conn = get_conn(&pool).await?;
+    let mut conn = get_conn(&state.pool).await?;
     let todo = todos::create(
         &mut conn,
         &payload.title,
@@ -47,11 +49,11 @@ pub async fn create_todo(
 }
 
 pub async fn update_todo(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateTodoRequest>,
 ) -> ApiResult<Json<Todo>> {
-    let mut conn = get_conn(&pool).await?;
+    let mut conn = get_conn(&state.pool).await?;
     let todo = todos::update(
         &mut conn,
         id,
@@ -67,29 +69,29 @@ pub async fn update_todo(
 }
 
 pub async fn delete_todo(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = get_conn(&pool).await?;
+    let mut conn = get_conn(&state.pool).await?;
     todos::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // Email account handlers
 pub async fn list_email_accounts(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<EmailAccountResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let accounts = email_accounts::list_all(&mut conn).await?;
     let responses: Vec<EmailAccountResponse> = accounts.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
 
 pub async fn delete_email_account(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(account_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     email_accounts::delete(&mut conn, account_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -102,13 +104,13 @@ pub struct OAuthStartResponse {
 
 // OAuth flow - Step 1: Start OAuth flow
 pub async fn start_gmail_oauth(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<ConnectEmailAccountRequest>,
 ) -> ApiResult<Json<OAuthStartResponse>> {
     let client_id =
         std::env::var("GOOGLE_CLIENT_ID").map_err(|_| ApiError::missing_env("GOOGLE_CLIENT_ID"))?;
 
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
 
     let account = email_accounts::create(
         &mut conn,
@@ -148,7 +150,7 @@ pub struct OAuthCallbackParams {
 
 // OAuth flow - Step 2: Handle OAuth callback
 pub async fn gmail_oauth_callback(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Query(params): Query<OAuthCallbackParams>,
 ) -> impl IntoResponse {
     let account_id = match Uuid::parse_str(&params.state) {
@@ -235,7 +237,7 @@ pub async fn gmail_oauth_callback(
     };
 
     // Update account with OAuth tokens and actual email
-    let mut conn = match pool.get().await {
+    let mut conn = match state.pool.get().await {
         Ok(c) => c,
         Err(_) => return Redirect::to("/oauth/error?msg=db_error").into_response(),
     };
@@ -274,27 +276,27 @@ pub async fn gmail_oauth_callback(
 }
 
 // Category handlers
-pub async fn list_categories(State(pool): State<DbPool>) -> ApiResult<Json<Vec<Category>>> {
-    let mut conn = get_conn(&pool).await?;
+pub async fn list_categories(State(state): State<AppState>) -> ApiResult<Json<Vec<Category>>> {
+    let mut conn = get_conn(&state.pool).await?;
     let items = categories::list_all(&mut conn).await?;
     Ok(Json(items))
 }
 
 pub async fn create_category(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<CreateCategoryRequest>,
 ) -> ApiResult<Json<Category>> {
-    let mut conn = get_conn(&pool).await?;
+    let mut conn = get_conn(&state.pool).await?;
     let category = categories::create(&mut conn, &payload.name, payload.color.as_deref()).await?;
     Ok(Json(category))
 }
 
 pub async fn update_category(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateCategoryRequest>,
 ) -> ApiResult<Json<Category>> {
-    let mut conn = get_conn(&pool).await?;
+    let mut conn = get_conn(&state.pool).await?;
     let category = categories::update(
         &mut conn,
         id,
@@ -306,20 +308,20 @@ pub async fn update_category(
 }
 
 pub async fn delete_category(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = get_conn(&pool).await?;
+    let mut conn = get_conn(&state.pool).await?;
     categories::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // Email handlers
 pub async fn list_emails(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Query(query): Query<EmailListQuery>,
 ) -> ApiResult<Json<Vec<EmailResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let limit = query.limit.or(Some(50));
     let offset = query.offset;
 
@@ -352,10 +354,10 @@ pub async fn list_emails(
 }
 
 pub async fn get_email(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<EmailResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let email = emails::get_by_id(&mut conn, id).await?;
 
     Ok(Json(EmailResponse {
@@ -381,8 +383,8 @@ pub struct EmailStatsResponse {
     pub unprocessed: i64,
 }
 
-pub async fn get_email_stats(State(pool): State<DbPool>) -> ApiResult<Json<EmailStatsResponse>> {
-    let mut conn = pool.get().await?;
+pub async fn get_email_stats(State(state): State<AppState>) -> ApiResult<Json<EmailStatsResponse>> {
+    let mut conn = state.pool.get().await?;
     let total = emails::count_all(&mut conn).await?;
     let unprocessed = emails::count_unprocessed(&mut conn).await?;
     Ok(Json(EmailStatsResponse { total, unprocessed }))
@@ -399,10 +401,10 @@ pub struct DecisionListParams {
 }
 
 pub async fn list_decisions(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Query(params): Query<DecisionListParams>,
 ) -> ApiResult<Json<Vec<AgentDecisionResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
 
     let items = if let Some(status) = params.status {
         decisions::list_by_status(&mut conn, &status).await?
@@ -417,28 +419,28 @@ pub async fn list_decisions(
 }
 
 pub async fn list_pending_decisions(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<AgentDecisionResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let items = decisions::list_pending(&mut conn).await?;
     let responses: Vec<AgentDecisionResponse> = items.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
 
 pub async fn get_decision(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<AgentDecisionResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let decision = decisions::get_by_id(&mut conn, id).await?;
     Ok(Json(decision.into()))
 }
 
 pub async fn create_decision(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<CreateAgentDecisionRequest>,
 ) -> ApiResult<Json<AgentDecisionResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let decision = decisions::create(
         &mut conn,
         &payload.source_type,
@@ -455,36 +457,36 @@ pub async fn create_decision(
 }
 
 pub async fn approve_decision(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(payload): Json<ApproveDecisionRequest>,
 ) -> ApiResult<Json<AgentDecisionResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let result = DecisionService::approve(&mut conn, id, payload.modifications).await?;
     Ok(Json(result.decision.into()))
 }
 
 pub async fn reject_decision(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(payload): Json<RejectDecisionRequest>,
 ) -> ApiResult<Json<AgentDecisionResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let decision = DecisionService::reject(&mut conn, id, payload.feedback.as_deref()).await?;
     Ok(Json(decision.into()))
 }
 
-pub async fn get_decision_stats(State(pool): State<DbPool>) -> ApiResult<Json<DecisionStats>> {
-    let mut conn = pool.get().await?;
+pub async fn get_decision_stats(State(state): State<AppState>) -> ApiResult<Json<DecisionStats>> {
+    let mut conn = state.pool.get().await?;
     let stats = decisions::get_stats(&mut conn).await?;
     Ok(Json(stats))
 }
 
 pub async fn batch_approve_decisions(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<BatchApproveDecisionsRequest>,
 ) -> ApiResult<Json<BatchOperationResponse>> {
-    let result = DecisionService::batch_approve(&pool, payload.decision_ids).await?;
+    let result = DecisionService::batch_approve(&state.pool, payload.decision_ids).await?;
     let failed = result
         .failed
         .into_iter()
@@ -500,12 +502,15 @@ pub async fn batch_approve_decisions(
 }
 
 pub async fn batch_reject_decisions(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<BatchRejectDecisionsRequest>,
 ) -> ApiResult<Json<BatchOperationResponse>> {
-    let result =
-        DecisionService::batch_reject(&pool, payload.decision_ids, payload.feedback.as_deref())
-            .await?;
+    let result = DecisionService::batch_reject(
+        &state.pool,
+        payload.decision_ids,
+        payload.feedback.as_deref(),
+    )
+    .await?;
     let failed = result
         .failed
         .into_iter()
@@ -522,10 +527,10 @@ pub async fn batch_reject_decisions(
 
 // Agent rules handlers
 pub async fn list_agent_rules(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Query(query): Query<RuleListQuery>,
 ) -> ApiResult<Json<Vec<AgentRuleResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
 
     let rules = if let Some(source) = &query.source_type {
         agent_rules::list_by_source_type(&mut conn, source).await?
@@ -544,20 +549,20 @@ pub async fn list_agent_rules(
 }
 
 pub async fn get_agent_rule(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<AgentRuleResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let rule = agent_rules::get_by_id(&mut conn, id).await?;
     let response: AgentRuleResponse = rule.try_into()?;
     Ok(Json(response))
 }
 
 pub async fn create_agent_rule(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<CreateAgentRuleRequest>,
 ) -> ApiResult<Json<AgentRuleResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
 
     let rule = agent_rules::create(&mut conn, &payload).await?;
     let response: AgentRuleResponse = rule.try_into()?;
@@ -565,11 +570,11 @@ pub async fn create_agent_rule(
 }
 
 pub async fn update_agent_rule(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateAgentRuleRequest>,
 ) -> ApiResult<Json<AgentRuleResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let rule = agent_rules::update(
         &mut conn,
         id,
@@ -589,10 +594,10 @@ pub async fn update_agent_rule(
 }
 
 pub async fn delete_agent_rule(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     agent_rules::delete(&mut conn, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -604,10 +609,10 @@ pub struct ToggleActiveResponse {
 }
 
 pub async fn toggle_agent_rule_active(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<ToggleActiveResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let current = agent_rules::get_by_id(&mut conn, id).await?;
 
     let updated = agent_rules::set_active(&mut conn, id, !current.is_active).await?;
@@ -622,20 +627,20 @@ pub async fn toggle_agent_rule_active(
 // ============================================================================
 
 pub async fn get_chat_history(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Query(query): Query<ChatHistoryQuery>,
 ) -> ApiResult<Json<Vec<ChatMessageResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let messages = chat_messages::list_history(&mut conn, query.limit, query.before).await?;
     let responses: Vec<ChatMessageResponse> = messages.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
 
 pub async fn send_chat_message(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<SendChatMessageRequest>,
 ) -> ApiResult<Json<ChatResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
 
     // Detect intent from the message content
     let (detected_intent, suggested_actions) = classify_intent(&payload.content, &mut conn).await;
@@ -662,8 +667,8 @@ pub async fn send_chat_message(
     }))
 }
 
-pub async fn clear_chat_history(State(pool): State<DbPool>) -> ApiResult<StatusCode> {
-    let mut conn = pool.get().await?;
+pub async fn clear_chat_history(State(state): State<AppState>) -> ApiResult<StatusCode> {
+    let mut conn = state.pool.get().await?;
 
     chat_messages::delete_all(&mut conn).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -847,10 +852,10 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 
 // Calendar event handlers
 pub async fn list_calendar_events(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Query(params): Query<CalendarEventQuery>,
 ) -> ApiResult<Json<Vec<CalendarEventResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let events = calendar_events::list_events(
         &mut conn,
         params.account_id,
@@ -865,10 +870,10 @@ pub async fn list_calendar_events(
 }
 
 pub async fn get_calendar_event(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(event_id): Path<Uuid>,
 ) -> ApiResult<Json<CalendarEventResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let event = calendar_events::get_by_id(&mut conn, event_id)
         .await?
         .ok_or_else(|| ApiError::not_found("Calendar event"))?;
@@ -876,18 +881,18 @@ pub async fn get_calendar_event(
 }
 
 pub async fn get_todays_events(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<CalendarEventResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let events = calendar_events::get_today(&mut conn).await?;
     let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
 
 pub async fn get_this_weeks_events(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<CalendarEventResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let events = calendar_events::get_this_week(&mut conn).await?;
     let responses: Vec<CalendarEventResponse> = events.into_iter().map(Into::into).collect();
     Ok(Json(responses))
@@ -927,19 +932,19 @@ impl From<shared_types::CalendarAccount> for CalendarAccountResponse {
 }
 
 pub async fn list_calendar_accounts(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<CalendarAccountResponse>>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let accounts = calendar_accounts::list(&mut conn).await?;
     let responses: Vec<CalendarAccountResponse> = accounts.into_iter().map(Into::into).collect();
     Ok(Json(responses))
 }
 
 pub async fn create_calendar_account(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Json(payload): Json<CreateCalendarAccountRequest>,
 ) -> ApiResult<Json<CalendarAccountResponse>> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     let account = calendar_accounts::create(
         &mut conn,
         &payload.account_name,
@@ -951,19 +956,19 @@ pub async fn create_calendar_account(
 }
 
 pub async fn delete_calendar_account(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(account_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
     calendar_accounts::delete(&mut conn, account_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn toggle_calendar_account(
-    State(pool): State<DbPool>,
+    State(state): State<AppState>,
     Path(account_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let mut conn = pool.get().await?;
+    let mut conn = state.pool.get().await?;
 
     // Get current state
     let account = calendar_accounts::get_by_id(&mut conn, account_id)

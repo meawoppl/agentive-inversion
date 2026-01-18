@@ -27,6 +27,14 @@ services:
       DATABASE_URL: postgres://testuser:testpassword@postgres:5432/agentive_inversion
       RUST_LOG: info
       FRONTEND_DIR: /app/frontend/dist
+      # Authentication - REQUIRED for production
+      # Generate JWT_SECRET with: openssl rand -hex 32
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:?ALLOWED_EMAILS is required}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET is required}
+      AUTH_REDIRECT_URI: ${AUTH_REDIRECT_URI:-http://localhost:3000/api/auth/callback}
+      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-http://localhost:3000/api/email-accounts/oauth/callback}
     ports:
       - "3000:3000"
     depends_on:

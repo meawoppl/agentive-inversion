@@ -64,3 +64,135 @@ main {
     color: #7f8c8d;
     font-size: 14px;
 }
+
+/* Navigation styles */
+.main-nav {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.nav-btn {
+    padding: 8px 16px;
+    border: 1px solid #3498db;
+    background-color: white;
+    color: #3498db;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.nav-btn:hover {
+    background-color: #ecf0f1;
+}
+
+.nav-btn.active {
+    background-color: #3498db;
+    color: white;
+}
+
+/* Email inbox styles */
+.email-inbox h2 {
+    margin-bottom: 8px;
+    color: #2c3e50;
+}
+
+.email-count {
+    color: #7f8c8d;
+    font-size: 14px;
+    margin-bottom: 16px;
+}
+
+.email-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.email-item {
+    padding: 16px;
+    background-color: #f9f9f9;
+    border-left: 4px solid #e74c3c;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.email-item:hover {
+    background-color: #f0f0f0;
+    transform: translateX(2px);
+}
+
+.email-item.processed {
+    border-left-color: #27ae60;
+    opacity: 0.8;
+}
+
+.email-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.email-from {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.email-date {
+    font-size: 12px;
+    color: #95a5a6;
+}
+
+.email-subject {
+    font-size: 15px;
+    color: #34495e;
+    margin-bottom: 4px;
+}
+
+.email-snippet {
+    font-size: 13px;
+    color: #7f8c8d;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 8px;
+}
+
+.email-badges {
+    display: flex;
+    gap: 8px;
+}
+
+.badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    text-transform: uppercase;
+}
+
+.badge.pending {
+    background-color: #f39c12;
+    color: white;
+}
+
+.badge.processed {
+    background-color: #27ae60;
+    color: white;
+}
+
+.badge.attachment {
+    background-color: #9b59b6;
+    color: white;
+}
+
+.loading, .error, .empty-state {
+    padding: 40px;
+    text-align: center;
+    color: #7f8c8d;
+}
+
+.error {
+    color: #e74c3c;
+}

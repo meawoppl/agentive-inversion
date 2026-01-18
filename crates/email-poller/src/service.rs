@@ -173,10 +173,15 @@ fn save_emails(emails: &[EmailMessage], account_email: &str, inbox_dir: &Path) -
             "mailbox": account_email,
             "subject": email.subject,
             "from": email.from,
+            "to": email.to,
+            "cc": email.cc,
             "received_at": email.received_at,
             "snippet": email.snippet,
-            "body": email.body,
+            "body_text": email.body_text,
+            "body_html": email.body_html,
             "history_id": email.history_id,
+            "labels": email.labels,
+            "has_attachments": email.has_attachments,
         });
 
         let json = serde_json::to_string_pretty(&email_data)?;
@@ -202,6 +207,33 @@ async fn save_emails_to_db(
         // Parse "From" header into address and name
         let (from_address, from_name) = parse_from_header(&email.from);
 
+        // Parse To addresses into (address, name) pairs
+        let to_addresses: Vec<Option<String>> = email
+            .to
+            .iter()
+            .map(|addr| Some(parse_from_header(addr).0))
+            .collect();
+
+        // Parse CC addresses into (address, name) pairs
+        let cc_addresses: Option<Vec<Option<String>>> = if email.cc.is_empty() {
+            None
+        } else {
+            Some(
+                email
+                    .cc
+                    .iter()
+                    .map(|addr| Some(parse_from_header(addr).0))
+                    .collect(),
+            )
+        };
+
+        // Labels as array
+        let labels: Option<Vec<Option<String>>> = if email.labels.is_empty() {
+            None
+        } else {
+            Some(email.labels.iter().map(|l| Some(l.clone())).collect())
+        };
+
         let new_email = NewEmail {
             account_id,
             gmail_id: email.id.clone(),
@@ -210,13 +242,13 @@ async fn save_emails_to_db(
             subject: email.subject.clone(),
             from_address,
             from_name,
-            to_addresses: vec![], // TODO: Parse To header when available
-            cc_addresses: None,
+            to_addresses,
+            cc_addresses,
             snippet: Some(email.snippet.clone()),
-            body_text: email.body.clone(),
-            body_html: None,        // TODO: Extract HTML body when available
-            labels: None,           // TODO: Get labels from Gmail API
-            has_attachments: false, // TODO: Detect attachments
+            body_text: email.body_text.clone(),
+            body_html: email.body_html.clone(),
+            labels,
+            has_attachments: email.has_attachments,
             received_at: email.received_at.unwrap_or_else(Utc::now),
         };
 

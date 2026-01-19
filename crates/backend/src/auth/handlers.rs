@@ -14,7 +14,7 @@ use crate::AppState;
 
 use super::{
     build_auth_cookie, extract_auth_user, jwt,
-    types::{AuthConfig, AuthUserResponse, LoginInitResponse},
+    types::{AuthUserResponse, LoginInitResponse},
 };
 
 /// Start Google OAuth login flow.
@@ -26,16 +26,28 @@ pub async fn auth_login(State(state): State<AppState>) -> ApiResult<Json<LoginIn
     // Generate state parameter (for CSRF protection in production, you'd want to store this)
     let csrf_state = uuid::Uuid::new_v4().to_string();
 
+    // Request scopes for login (openid, email, profile) plus Gmail and Calendar access
+    let scopes = [
+        "openid",
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/calendar",
+    ]
+    .join(" ");
+
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?\
          client_id={}&\
          redirect_uri={}&\
          response_type=code&\
-         scope=openid%20email%20profile&\
-         access_type=online&\
+         scope={}&\
+         access_type=offline&\
+         prompt=consent&\
          state={}",
         urlencoding::encode(&config.google_client_id),
         urlencoding::encode(&config.auth_redirect_uri),
+        urlencoding::encode(&scopes),
         csrf_state
     );
 
@@ -52,6 +64,8 @@ pub struct AuthCallbackParams {
 #[derive(Debug, Deserialize)]
 struct GoogleTokenResponse {
     access_token: String,
+    refresh_token: Option<String>,
+    expires_in: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,11 +78,12 @@ struct GoogleUserInfo {
 ///
 /// Exchanges the authorization code for tokens, validates the user's email
 /// against the allowlist, and sets an auth cookie on success.
+/// Also creates/updates email and calendar accounts with OAuth tokens.
 pub async fn auth_callback(
     State(state): State<AppState>,
     Query(params): Query<AuthCallbackParams>,
 ) -> Response {
-    match handle_callback_inner(&state.auth_config, params).await {
+    match handle_callback_inner(&state, params).await {
         Ok(response) => response,
         Err(e) => {
             tracing::error!("Auth callback error: {:?}", e);
@@ -78,9 +93,11 @@ pub async fn auth_callback(
 }
 
 async fn handle_callback_inner(
-    config: &AuthConfig,
+    state: &AppState,
     params: AuthCallbackParams,
 ) -> Result<Response, ApiError> {
+    let config = &state.auth_config;
+
     // Exchange code for access token
     let client = reqwest::Client::new();
 
@@ -137,8 +154,27 @@ async fn handle_callback_inner(
         return Ok(Redirect::to("/?auth_error=unauthorized_email").into_response());
     }
 
+    // Store OAuth tokens for email and calendar access if we got a refresh token
+    if let Some(ref refresh_token) = tokens.refresh_token {
+        if let Err(e) = store_oauth_tokens(
+            &state.pool,
+            &user_info.email,
+            user_info.name.clone(),
+            refresh_token,
+            &tokens.access_token,
+            tokens.expires_in,
+        )
+        .await
+        {
+            tracing::error!("Failed to store OAuth tokens: {:?}", e);
+            // Continue with login even if token storage fails
+        }
+    } else {
+        tracing::warn!("No refresh token received - email/calendar access may not work");
+    }
+
     // Create JWT
-    let token = jwt::create_token(config, &user_info.email, user_info.name)
+    let token = jwt::create_token(config, &user_info.email, user_info.name.clone())
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to create token: {}", e)))?;
 
     // Build cookie
@@ -155,6 +191,42 @@ async fn handle_callback_inner(
         ],
     )
         .into_response())
+}
+
+/// Store OAuth tokens in google_accounts table
+///
+/// Both email and calendar pollers will look up tokens from google_accounts,
+/// since we request all scopes (gmail.modify, calendar) in a single OAuth flow.
+async fn store_oauth_tokens(
+    pool: &crate::db::DbPool,
+    email: &str,
+    name: Option<String>,
+    refresh_token: &str,
+    access_token: &str,
+    expires_in: Option<i64>,
+) -> anyhow::Result<()> {
+    use crate::db::{get_conn, google_accounts};
+    use chrono::{Duration, Utc};
+
+    let mut conn = get_conn(pool).await?;
+    let expires_at = expires_in.map(|secs| Utc::now() + Duration::seconds(secs));
+
+    // Upsert google account with OAuth tokens
+    google_accounts::upsert(
+        &mut conn,
+        email,
+        name.as_deref(),
+        refresh_token,
+        Some(access_token),
+        expires_at,
+    )
+    .await?;
+
+    tracing::info!(
+        "Successfully stored OAuth tokens for: {} (grants Gmail and Calendar access)",
+        email
+    );
+    Ok(())
 }
 
 /// Get current authenticated user info.

@@ -159,6 +159,7 @@ async fn handle_callback_inner(
         if let Err(e) = store_oauth_tokens(
             &state.pool,
             &user_info.email,
+            user_info.name.clone(),
             refresh_token,
             &tokens.access_token,
             tokens.expires_in,
@@ -173,7 +174,7 @@ async fn handle_callback_inner(
     }
 
     // Create JWT
-    let token = jwt::create_token(config, &user_info.email, user_info.name)
+    let token = jwt::create_token(config, &user_info.email, user_info.name.clone())
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to create token: {}", e)))?;
 
     // Build cookie
@@ -192,91 +193,37 @@ async fn handle_callback_inner(
         .into_response())
 }
 
-/// Store OAuth tokens for email and calendar accounts
+/// Store OAuth tokens in google_accounts table
+///
+/// Both email and calendar pollers will look up tokens from google_accounts,
+/// since we request all scopes (gmail.modify, calendar) in a single OAuth flow.
 async fn store_oauth_tokens(
     pool: &crate::db::DbPool,
     email: &str,
+    name: Option<String>,
     refresh_token: &str,
     access_token: &str,
     expires_in: Option<i64>,
 ) -> anyhow::Result<()> {
-    use crate::db::{calendar_accounts, email_accounts, get_conn};
+    use crate::db::{get_conn, google_accounts};
     use chrono::{Duration, Utc};
 
     let mut conn = get_conn(pool).await?;
     let expires_at = expires_in.map(|secs| Utc::now() + Duration::seconds(secs));
 
-    // Create or update email account
-    let email_account = email_accounts::get_by_email(&mut conn, email).await?;
-    match email_account {
-        Some(account) => {
-            tracing::info!(
-                "Updating OAuth tokens for existing email account: {}",
-                email
-            );
-            email_accounts::update_oauth_tokens(
-                &mut conn,
-                account.id,
-                refresh_token,
-                access_token,
-                expires_at.unwrap_or_else(|| Utc::now() + Duration::hours(1)),
-            )
-            .await?;
-        }
-        None => {
-            tracing::info!("Creating new email account for: {}", email);
-            let account = email_accounts::create(&mut conn, email, email, "google").await?;
-            email_accounts::update_oauth_tokens(
-                &mut conn,
-                account.id,
-                refresh_token,
-                access_token,
-                expires_at.unwrap_or_else(|| Utc::now() + Duration::hours(1)),
-            )
-            .await?;
-        }
-    }
-
-    // Create or update calendar account
-    // Use "primary" as the calendar_id which refers to the user's primary calendar
-    let calendar_id = "primary";
-    let existing_calendar = calendar_accounts::list(&mut conn)
-        .await?
-        .into_iter()
-        .find(|c| c.email_address.as_deref() == Some(email));
-
-    match existing_calendar {
-        Some(account) => {
-            tracing::info!(
-                "Updating OAuth tokens for existing calendar account: {}",
-                email
-            );
-            calendar_accounts::update_oauth_tokens(
-                &mut conn,
-                account.id,
-                Some(refresh_token),
-                Some(access_token),
-                expires_at,
-            )
-            .await?;
-        }
-        None => {
-            tracing::info!("Creating new calendar account for: {}", email);
-            let account =
-                calendar_accounts::create(&mut conn, email, calendar_id, Some(email)).await?;
-            calendar_accounts::update_oauth_tokens(
-                &mut conn,
-                account.id,
-                Some(refresh_token),
-                Some(access_token),
-                expires_at,
-            )
-            .await?;
-        }
-    }
+    // Upsert google account with OAuth tokens
+    google_accounts::upsert(
+        &mut conn,
+        email,
+        name.as_deref(),
+        refresh_token,
+        Some(access_token),
+        expires_at,
+    )
+    .await?;
 
     tracing::info!(
-        "Successfully stored OAuth tokens for email and calendar access: {}",
+        "Successfully stored OAuth tokens for: {} (grants Gmail and Calendar access)",
         email
     );
     Ok(())

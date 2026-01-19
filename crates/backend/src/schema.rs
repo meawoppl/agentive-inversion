@@ -126,6 +126,19 @@ diesel::table! {
 }
 
 diesel::table! {
+    google_accounts (id) {
+        id -> Uuid,
+        email -> Varchar,
+        name -> Nullable<Varchar>,
+        refresh_token -> Text,
+        access_token -> Nullable<Text>,
+        token_expires_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     emails (id) {
         id -> Uuid,
         account_id -> Uuid,
@@ -185,5 +198,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     categories,
     email_accounts,
     emails,
+    google_accounts,
     todos,
 );

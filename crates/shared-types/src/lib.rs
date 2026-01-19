@@ -130,6 +130,21 @@ pub enum EmailProvider {
     Gmail,
 }
 
+/// Google account with OAuth tokens
+/// Used for both Gmail and Calendar API access via scopes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
+pub struct GoogleAccount {
+    pub id: Uuid,
+    pub email: String,
+    pub name: Option<String>,
+    pub refresh_token: String,
+    pub access_token: Option<String>,
+    pub token_expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncStatus {
     Pending,

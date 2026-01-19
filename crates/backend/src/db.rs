@@ -1535,25 +1535,9 @@ pub mod calendar_accounts {
 
 // Google accounts database operations
 // Used for OAuth tokens that grant access to Gmail and Calendar APIs
-#[allow(dead_code)]
 pub mod google_accounts {
     use super::*;
     use shared_types::GoogleAccount;
-
-    pub async fn get_by_email(
-        conn: &mut AsyncPgConnection,
-        email_addr: &str,
-    ) -> anyhow::Result<Option<GoogleAccount>> {
-        use crate::schema::google_accounts::dsl::*;
-
-        let account = google_accounts
-            .filter(email.eq(email_addr))
-            .first::<GoogleAccount>(conn)
-            .await
-            .optional()?;
-
-        Ok(account)
-    }
 
     pub async fn upsert(
         conn: &mut AsyncPgConnection,
@@ -1608,46 +1592,5 @@ pub mod google_accounts {
                 Ok(new_account)
             }
         }
-    }
-
-    pub async fn update_tokens(
-        conn: &mut AsyncPgConnection,
-        account_id: Uuid,
-        access_token_val: &str,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> anyhow::Result<()> {
-        use crate::schema::google_accounts::dsl::*;
-
-        diesel::update(google_accounts.filter(id.eq(account_id)))
-            .set((
-                access_token.eq(Some(access_token_val)),
-                token_expires_at.eq(expires_at),
-                updated_at.eq(Utc::now()),
-            ))
-            .execute(conn)
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn list_all(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<GoogleAccount>> {
-        use crate::schema::google_accounts::dsl::*;
-
-        let accounts = google_accounts
-            .order_by(created_at.desc())
-            .load::<GoogleAccount>(conn)
-            .await?;
-
-        Ok(accounts)
-    }
-
-    pub async fn delete(conn: &mut AsyncPgConnection, account_id: Uuid) -> anyhow::Result<()> {
-        use crate::schema::google_accounts::dsl::*;
-
-        diesel::delete(google_accounts.filter(id.eq(account_id)))
-            .execute(conn)
-            .await?;
-
-        Ok(())
     }
 }

@@ -1329,74 +1329,84 @@ fn todo_list() -> Html {
                 <button type="submit">{"Add"}</button>
             </form>
             <p class="todo-count">{format!("{} todos", sorted_todos.len())}</p>
-            <div class="todo-list">
-                {if sorted_todos.is_empty() {
-                    html! { <p class="empty-state">{"No todos yet! Add one above or approve some decisions."}</p> }
-                } else {
-                    sorted_todos.iter().map(|todo| {
-                        let category = todo.category_id
-                            .and_then(|cat_id| categories_list.iter().find(|c| c.id == cat_id));
-                        let todo_id = todo.id;
-                        let todo_completed = todo.completed;
-                        let toggle = toggle_complete.clone();
-                        let delete = delete_todo.clone();
+            {if sorted_todos.is_empty() {
+                html! { <p class="empty-state">{"No todos yet! Add one above or approve some decisions."}</p> }
+            } else {
+                html! {
+                    <table class="todo-table">
+                        <thead>
+                            <tr>
+                                <th class="col-done">{"Done"}</th>
+                                <th class="col-title">{"Title"}</th>
+                                <th class="col-due">{"Due Date"}</th>
+                                <th class="col-link">{"Link"}</th>
+                                <th class="col-actions">{"Actions"}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {sorted_todos.iter().map(|todo| {
+                                let category = todo.category_id
+                                    .and_then(|cat_id| categories_list.iter().find(|c| c.id == cat_id));
+                                let todo_id = todo.id;
+                                let todo_completed = todo.completed;
+                                let toggle = toggle_complete.clone();
+                                let delete = delete_todo.clone();
 
-                        html! {
-                            <div key={todo.id.to_string()} class={format!("todo-item {}", if todo.completed { "completed" } else { "" })}>
-                                <div class="todo-header">
-                                    <input
-                                        type="checkbox"
-                                        checked={todo.completed}
-                                        onchange={Callback::from(move |_| toggle.emit((todo_id, todo_completed)))}
-                                    />
-                                    <h3 class={if todo.completed { "strikethrough" } else { "" }}>{&todo.title}</h3>
-                                </div>
-                                {if let Some(desc) = &todo.description {
-                                    html! { <p class="description">{desc}</p> }
-                                } else {
-                                    html! {}
-                                }}
-                                {if let Some(due) = &todo.due_date {
-                                    html! {
-                                        <p class="due-date">
-                                            {"Due: "}
-                                            {due.format("%Y-%m-%d %H:%M").to_string()}
-                                        </p>
-                                    }
-                                } else {
-                                    html! {}
-                                }}
-                                {if let Some(link) = &todo.link {
-                                    html! {
-                                        <p class="link">
-                                            <a href={link.clone()} target="_blank">{"View Link"}</a>
-                                        </p>
-                                    }
-                                } else {
-                                    html! {}
-                                }}
-                                <div class="todo-footer">
-                                    {if let Some(cat) = category {
-                                        html! {
-                                            <span class="category-badge" style={format!("background-color: {}", cat.color.as_deref().unwrap_or("#cccccc"))}>
-                                                {&cat.name}
-                                            </span>
-                                        }
-                                    } else {
-                                        html! {}
-                                    }}
-                                    {if todo.decision_id.is_some() {
-                                        html! { <span class="source-badge">{"From Agent"}</span> }
-                                    } else {
-                                        html! {}
-                                    }}
-                                    <button class="delete-btn" onclick={Callback::from(move |_| delete.emit(todo_id))}>{"Delete"}</button>
-                                </div>
-                            </div>
-                        }
-                    }).collect::<Html>()
-                }}
-            </div>
+                                html! {
+                                    <tr key={todo.id.to_string()} class={if todo.completed { "completed" } else { "" }}>
+                                        <td class="col-done">
+                                            <input
+                                                type="checkbox"
+                                                checked={todo.completed}
+                                                onchange={Callback::from(move |_| toggle.emit((todo_id, todo_completed)))}
+                                            />
+                                        </td>
+                                        <td class="col-title">
+                                            <span class={if todo.completed { "strikethrough" } else { "" }}>{&todo.title}</span>
+                                            {if let Some(desc) = &todo.description {
+                                                html! { <span class="todo-description">{" - "}{desc}</span> }
+                                            } else {
+                                                html! {}
+                                            }}
+                                            {if let Some(cat) = category {
+                                                html! {
+                                                    <span class="category-badge" style={format!("background-color: {}", cat.color.as_deref().unwrap_or("#cccccc"))}>
+                                                        {&cat.name}
+                                                    </span>
+                                                }
+                                            } else {
+                                                html! {}
+                                            }}
+                                            {if todo.decision_id.is_some() {
+                                                html! { <span class="source-badge">{"From Agent"}</span> }
+                                            } else {
+                                                html! {}
+                                            }}
+                                        </td>
+                                        <td class="col-due">
+                                            {if let Some(due) = &todo.due_date {
+                                                html! { {due.format("%Y-%m-%d %H:%M").to_string()} }
+                                            } else {
+                                                html! { <span class="empty-cell">{"-"}</span> }
+                                            }}
+                                        </td>
+                                        <td class="col-link">
+                                            {if let Some(link) = &todo.link {
+                                                html! { <a href={link.clone()} target="_blank">{"View"}</a> }
+                                            } else {
+                                                html! { <span class="empty-cell">{"-"}</span> }
+                                            }}
+                                        </td>
+                                        <td class="col-actions">
+                                            <button class="delete-btn" onclick={Callback::from(move |_| delete.emit(todo_id))}>{"Delete"}</button>
+                                        </td>
+                                    </tr>
+                                }
+                            }).collect::<Html>()}
+                        </tbody>
+                    </table>
+                }
+            }}
         </div>
     }
 }

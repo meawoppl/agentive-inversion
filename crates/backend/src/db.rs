@@ -1539,6 +1539,18 @@ pub mod google_accounts {
     use super::*;
     use shared_types::GoogleAccount;
 
+    /// List all Google accounts (used by email and calendar pollers)
+    pub async fn list_all(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<GoogleAccount>> {
+        use crate::schema::google_accounts::dsl::*;
+
+        let accounts = google_accounts
+            .order_by(created_at.desc())
+            .load::<GoogleAccount>(conn)
+            .await?;
+
+        Ok(accounts)
+    }
+
     pub async fn upsert(
         conn: &mut AsyncPgConnection,
         email_addr: &str,

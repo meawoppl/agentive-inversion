@@ -236,10 +236,50 @@ main {
     background-color: #2980b9;
 }
 
+.todo-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
 .todo-count {
     color: #7f8c8d;
     font-size: 14px;
-    margin-bottom: 12px;
+    margin: 0;
+}
+
+.sort-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sort-label {
+    color: #7f8c8d;
+    font-size: 13px;
+}
+
+.sort-btn {
+    padding: 4px 12px;
+    font-size: 13px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: #fff;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sort-btn:hover {
+    background-color: #f5f5f5;
+    border-color: #ccc;
+}
+
+.sort-btn.active {
+    background-color: #3498db;
+    border-color: #3498db;
+    color: #fff;
 }
 
 /* Todo table styles */

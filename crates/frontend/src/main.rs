@@ -57,6 +57,14 @@ pub enum View {
     Categories,
 }
 
+/// Sort options for the todo list
+#[derive(Clone, PartialEq, Copy)]
+pub enum TodoSortOption {
+    DueDate,
+    Category,
+    Title,
+}
+
 /// Shared application state accessible via context
 #[derive(Clone, PartialEq)]
 pub struct AppState {
@@ -1359,6 +1367,7 @@ fn todo_list() -> Html {
     let error = use_state(|| None::<String>);
     let new_title = use_state(String::new);
     let refresh_trigger = use_state(|| 0u32);
+    let sort_option = use_state(|| TodoSortOption::DueDate);
 
     // Fetch todos and categories
     {
@@ -1507,20 +1516,45 @@ fn todo_list() -> Html {
         };
     }
 
-    // Sort todos by due date (nulls last), then by completed status
-    let mut sorted_todos = (*todos).clone();
-    sorted_todos.sort_by(|a, b| match (a.completed, b.completed) {
-        (true, false) => std::cmp::Ordering::Greater,
-        (false, true) => std::cmp::Ordering::Less,
-        _ => match (&a.due_date, &b.due_date) {
-            (Some(date_a), Some(date_b)) => date_a.cmp(date_b),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        },
-    });
-
     let categories_list = (*categories).clone();
+    let current_sort = *sort_option;
+
+    // Sort todos: completed status first, then by selected sort option
+    let mut sorted_todos = (*todos).clone();
+    sorted_todos.sort_by(|a, b| {
+        // Always put completed items at the bottom
+        match (a.completed, b.completed) {
+            (true, false) => return std::cmp::Ordering::Greater,
+            (false, true) => return std::cmp::Ordering::Less,
+            _ => {}
+        }
+        // Then sort by selected option
+        match current_sort {
+            TodoSortOption::DueDate => match (&a.due_date, &b.due_date) {
+                (Some(date_a), Some(date_b)) => date_a.cmp(date_b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            },
+            TodoSortOption::Category => {
+                let cat_a = a
+                    .category_id
+                    .and_then(|id| categories_list.iter().find(|c| c.id == id))
+                    .map(|c| c.name.as_str());
+                let cat_b = b
+                    .category_id
+                    .and_then(|id| categories_list.iter().find(|c| c.id == id))
+                    .map(|c| c.name.as_str());
+                match (cat_a, cat_b) {
+                    (Some(name_a), Some(name_b)) => name_a.cmp(name_b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+            TodoSortOption::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+        }
+    });
 
     html! {
         <div class="todo-container">
@@ -1534,7 +1568,39 @@ fn todo_list() -> Html {
                 />
                 <button type="submit">{"Add"}</button>
             </form>
-            <p class="todo-count">{format!("{} todos", sorted_todos.len())}</p>
+            <div class="todo-toolbar">
+                <p class="todo-count">{format!("{} todos", sorted_todos.len())}</p>
+                <div class="sort-controls">
+                    <span class="sort-label">{"Sort by:"}</span>
+                    <button
+                        class={if current_sort == TodoSortOption::DueDate { "sort-btn active" } else { "sort-btn" }}
+                        onclick={{
+                            let sort_option = sort_option.clone();
+                            Callback::from(move |_| sort_option.set(TodoSortOption::DueDate))
+                        }}
+                    >
+                        {"Date"}
+                    </button>
+                    <button
+                        class={if current_sort == TodoSortOption::Category { "sort-btn active" } else { "sort-btn" }}
+                        onclick={{
+                            let sort_option = sort_option.clone();
+                            Callback::from(move |_| sort_option.set(TodoSortOption::Category))
+                        }}
+                    >
+                        {"Category"}
+                    </button>
+                    <button
+                        class={if current_sort == TodoSortOption::Title { "sort-btn active" } else { "sort-btn" }}
+                        onclick={{
+                            let sort_option = sort_option.clone();
+                            Callback::from(move |_| sort_option.set(TodoSortOption::Title))
+                        }}
+                    >
+                        {"Title"}
+                    </button>
+                </div>
+            </div>
             {if sorted_todos.is_empty() {
                 html! { <p class="empty-state">{"No todos yet! Add one above or approve some decisions."}</p> }
             } else {

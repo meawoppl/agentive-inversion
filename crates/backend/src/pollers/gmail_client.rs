@@ -8,7 +8,7 @@ use google_gmail1::Gmail;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use shared_types::EmailAccount;
+use shared_types::GoogleAccount;
 
 /// Client for interacting with Gmail API
 #[allow(dead_code)]
@@ -36,12 +36,9 @@ pub struct EmailMessage {
 }
 
 impl GmailClient {
-    /// Create a new Gmail client from an EmailAccount with stored OAuth tokens
-    pub async fn from_account(account: &EmailAccount) -> Result<Self> {
-        let refresh_token = account
-            .oauth_refresh_token
-            .as_ref()
-            .context("No refresh token stored for account")?;
+    /// Create a new Gmail client from a GoogleAccount with stored OAuth tokens
+    pub async fn from_account(account: &GoogleAccount) -> Result<Self> {
+        let refresh_token = &account.refresh_token;
 
         let client_id = std::env::var("GOOGLE_CLIENT_ID")
             .context("GOOGLE_CLIENT_ID environment variable must be set")?;
@@ -75,7 +72,7 @@ impl GmailClient {
 
         Ok(Self {
             hub,
-            email_address: account.email_address.clone(),
+            email_address: account.email.clone(),
         })
     }
 

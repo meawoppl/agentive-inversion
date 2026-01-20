@@ -9,7 +9,7 @@ use crate::db::{self, DbPool};
 use crate::models::NewEmail;
 use anyhow::{Context, Result};
 use chrono::Utc;
-use shared_types::EmailAccount;
+use shared_types::GoogleAccount;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -131,8 +131,8 @@ async fn run_poll_cycle(
 ) -> Result<()> {
     let mut conn = pool.get().await.context("Failed to get DB connection")?;
 
-    // Get active email accounts from database
-    let accounts = db::email_accounts::list_active(&mut conn).await?;
+    // Get Google accounts from database (OAuth tokens are stored here)
+    let accounts = db::google_accounts::list_all(&mut conn).await?;
 
     if accounts.is_empty() {
         tracing::debug!("No active email accounts configured");
@@ -143,8 +143,8 @@ async fn run_poll_cycle(
 
     for account in accounts {
         // Check rate limiting
-        if !rate_limiter.can_poll(&account.email_address, config.rate_limit_secs) {
-            tracing::debug!("Skipping {} (rate limited)", account.email_address);
+        if !rate_limiter.can_poll(&account.email, config.rate_limit_secs) {
+            tracing::debug!("Skipping {} (rate limited)", account.email);
             continue;
         }
 
@@ -154,11 +154,7 @@ async fn run_poll_cycle(
         match poll_single_account(&account, state, pool, config.max_fetch_per_poll).await {
             Ok(result) => {
                 if result.count > 0 {
-                    tracing::info!(
-                        "Fetched {} new emails from {}",
-                        result.count,
-                        account.email_address
-                    );
+                    tracing::info!("Fetched {} new emails from {}", result.count, account.email);
                 }
 
                 // Update state for next poll
@@ -166,18 +162,10 @@ async fn run_poll_cycle(
                     state.last_history_id = Some(history_id);
                 }
 
-                rate_limiter.record_poll(&account.email_address);
+                rate_limiter.record_poll(&account.email);
             }
             Err(e) => {
-                tracing::error!("Failed to poll {}: {}", account.email_address, e);
-
-                // Update sync status in database
-                if let Err(update_err) =
-                    db::email_accounts::update_sync_error(&mut conn, account.id, &e.to_string())
-                        .await
-                {
-                    tracing::error!("Failed to update sync error: {}", update_err);
-                }
+                tracing::error!("Failed to poll {}: {}", account.email, e);
             }
         }
     }
@@ -210,20 +198,12 @@ struct PollResult {
 }
 
 async fn poll_single_account(
-    account: &EmailAccount,
+    account: &GoogleAccount,
     state: &AccountState,
     pool: &DbPool,
     max_fetch_per_poll: u32,
 ) -> Result<PollResult> {
-    // Check if account has OAuth tokens
-    if account.oauth_refresh_token.is_none() {
-        return Err(anyhow::anyhow!(
-            "Account {} has no OAuth tokens configured",
-            account.email_address
-        ));
-    }
-
-    tracing::debug!("Polling {}...", account.email_address);
+    tracing::debug!("Polling {}...", account.email);
 
     let client = GmailClient::from_account(account)
         .await

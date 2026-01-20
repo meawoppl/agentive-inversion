@@ -1368,6 +1368,7 @@ fn todo_list() -> Html {
     let new_title = use_state(String::new);
     let refresh_trigger = use_state(|| 0u32);
     let sort_option = use_state(|| TodoSortOption::DueDate);
+    let show_completed = use_state(|| false);
 
     // Fetch todos and categories
     {
@@ -1518,9 +1519,14 @@ fn todo_list() -> Html {
 
     let categories_list = (*categories).clone();
     let current_sort = *sort_option;
+    let showing_completed = *show_completed;
 
-    // Sort todos: completed status first, then by selected sort option
-    let mut sorted_todos = (*todos).clone();
+    // Filter and sort todos
+    let mut sorted_todos: Vec<Todo> = (*todos)
+        .iter()
+        .filter(|t| showing_completed || !t.completed)
+        .cloned()
+        .collect();
     sorted_todos.sort_by(|a, b| {
         // Always put completed items at the bottom
         match (a.completed, b.completed) {
@@ -1570,6 +1576,17 @@ fn todo_list() -> Html {
             </form>
             <div class="todo-toolbar">
                 <p class="todo-count">{format!("{} todos", sorted_todos.len())}</p>
+                <label class="show-completed-toggle">
+                    <input
+                        type="checkbox"
+                        checked={showing_completed}
+                        onchange={{
+                            let show_completed = show_completed.clone();
+                            Callback::from(move |_| show_completed.set(!*show_completed))
+                        }}
+                    />
+                    {"Show completed"}
+                </label>
                 <div class="sort-controls">
                     <span class="sort-label">{"Sort by:"}</span>
                     <button

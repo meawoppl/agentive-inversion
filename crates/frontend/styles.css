@@ -282,6 +282,19 @@ main {
     color: #fff;
 }
 
+.show-completed-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #7f8c8d;
+    cursor: pointer;
+}
+
+.show-completed-toggle input[type="checkbox"] {
+    cursor: pointer;
+}
+
 /* Todo table styles */
 .todo-table {
     width: 100%;

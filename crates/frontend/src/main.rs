@@ -1,10 +1,8 @@
-use chrono::{DateTime, Utc};
 use gloo_net::http::Request;
-use serde::Deserialize;
 use shared_types::{
     AgentDecisionResponse, ApproveDecisionRequest, AuthUserResponse, BatchApproveDecisionsRequest,
     BatchRejectDecisionsRequest, CalendarEventResponse, Category, ChatMessageResponse,
-    ChatResponse, CreateTodoRequest, DecisionStats, EmailAccountResponse, EmailResponse,
+    ChatResponse, CreateTodoRequest, DecisionStats, EmailResponse, GoogleAccountResponse,
     LoginInitResponse, ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest,
     SuggestedAction, Todo, UpdateTodoRequest,
 };
@@ -25,22 +23,6 @@ pub enum AuthState {
     Authenticated { email: String, name: Option<String> },
     /// User is not authenticated
     Unauthenticated,
-}
-
-// ============================================================================
-// OAuth Account Types (for header display)
-// ============================================================================
-
-/// Calendar account response (mirrors backend CalendarAccountResponse)
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct CalendarAccountResponse {
-    pub id: Uuid,
-    pub account_name: String,
-    pub calendar_id: String,
-    pub email_address: Option<String>,
-    pub sync_status: String,
-    pub last_synced: Option<DateTime<Utc>>,
-    pub is_active: bool,
 }
 
 // ============================================================================
@@ -173,34 +155,22 @@ pub fn app_context_provider(props: &AppContextProviderProps) -> Html {
 // Account Status Component - Shows OAuth account status in header
 // ============================================================================
 
+/// AccountStatus shows connected Google accounts in the header
 #[function_component(AccountStatus)]
 fn account_status() -> Html {
-    let email_accounts = use_state(Vec::<EmailAccountResponse>::new);
-    let calendar_accounts = use_state(Vec::<CalendarAccountResponse>::new);
+    let accounts = use_state(Vec::<GoogleAccountResponse>::new);
     let expanded = use_state(|| false);
 
     // Fetch accounts on mount
     {
-        let email_accounts = email_accounts.clone();
-        let calendar_accounts = calendar_accounts.clone();
+        let accounts = accounts.clone();
         use_effect_with((), move |_| {
-            let email_accounts = email_accounts.clone();
-            let calendar_accounts = calendar_accounts.clone();
+            let accounts = accounts.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                // Fetch email accounts
-                if let Ok(response) = Request::get("/api/email-accounts").send().await {
+                if let Ok(response) = Request::get("/api/google-accounts").send().await {
                     if response.ok() {
-                        if let Ok(accounts) = response.json::<Vec<EmailAccountResponse>>().await {
-                            email_accounts.set(accounts);
-                        }
-                    }
-                }
-                // Fetch calendar accounts
-                if let Ok(response) = Request::get("/api/calendar-accounts").send().await {
-                    if response.ok() {
-                        if let Ok(accounts) = response.json::<Vec<CalendarAccountResponse>>().await
-                        {
-                            calendar_accounts.set(accounts);
+                        if let Ok(data) = response.json::<Vec<GoogleAccountResponse>>().await {
+                            accounts.set(data);
                         }
                     }
                 }
@@ -214,131 +184,41 @@ fn account_status() -> Html {
         Callback::from(move |_| expanded.set(!*expanded))
     };
 
-    // Helper to get status indicator class
-    fn status_class(status: &str, is_active: bool) -> &'static str {
-        if !is_active {
-            "status-inactive"
-        } else {
-            match status {
-                "success" => "status-ok",
-                "syncing" | "pending" => "status-syncing",
-                "auth_required" => "status-auth-required",
-                "failed" => "status-error",
-                _ => "status-unknown",
-            }
-        }
-    }
-
-    // Count accounts by status
-    let email_ok = email_accounts
-        .iter()
-        .filter(|a| a.is_active && a.sync_status == "success")
-        .count();
-    let email_needs_auth = email_accounts
-        .iter()
-        .filter(|a| a.sync_status == "auth_required")
-        .count();
-    let calendar_ok = calendar_accounts
-        .iter()
-        .filter(|a| a.is_active && a.sync_status == "success")
-        .count();
-    let calendar_needs_auth = calendar_accounts
-        .iter()
-        .filter(|a| a.sync_status == "auth_required")
-        .count();
-
-    let total_accounts = email_accounts.len() + calendar_accounts.len();
-    let needs_attention = email_needs_auth + calendar_needs_auth;
+    let total_accounts = accounts.len();
 
     html! {
         <div class="account-status-container">
             <button class="account-status-btn" onclick={toggle_expanded.clone()}>
                 <span class="account-status-icon">{"@"}</span>
                 <span class="account-status-count">{total_accounts}</span>
-                {if needs_attention > 0 {
-                    html! { <span class="account-status-alert">{needs_attention}</span> }
-                } else {
-                    html! {}
-                }}
             </button>
 
             {if *expanded {
-                let email_list = (*email_accounts).clone();
-                let calendar_list = (*calendar_accounts).clone();
+                let account_list = (*accounts).clone();
                 html! {
                     <div class="account-status-dropdown">
                         <div class="account-section">
                             <div class="account-section-header">
-                                <span>{"Email Accounts"}</span>
-                                <span class="account-section-count">{format!("{}/{} ok", email_ok, email_list.len())}</span>
+                                <span>{"Connected Accounts"}</span>
+                                <span class="account-section-count">{account_list.len()}</span>
                             </div>
-                            {if email_list.is_empty() {
-                                html! { <div class="account-empty">{"No email accounts connected"}</div> }
+                            {if account_list.is_empty() {
+                                html! { <div class="account-empty">{"No accounts connected"}</div> }
                             } else {
-                                email_list.iter().map(|account| {
-                                    let status = status_class(&account.sync_status, account.is_active);
+                                account_list.iter().map(|account| {
                                     html! {
-                                        <div key={account.id.to_string()} class={format!("account-item {}", status)}>
+                                        <div key={account.id.to_string()} class="account-item status-ok">
                                             <div class="account-info">
-                                                <span class="account-email">{&account.email_address}</span>
-                                                <span class="account-name">{&account.account_name}</span>
+                                                <span class="account-email">{&account.email}</span>
+                                                {if let Some(name) = &account.name {
+                                                    html! { <span class="account-name">{name}</span> }
+                                                } else {
+                                                    html! {}
+                                                }}
                                             </div>
                                             <div class="account-status-indicator">
-                                                <span class={format!("status-dot {}", status)}></span>
-                                                <span class="status-text">{
-                                                    if !account.is_active {
-                                                        "Inactive"
-                                                    } else {
-                                                        match account.sync_status.as_str() {
-                                                            "success" => "OK",
-                                                            "syncing" => "Syncing",
-                                                            "pending" => "Pending",
-                                                            "auth_required" => "Auth Required",
-                                                            "failed" => "Failed",
-                                                            _ => "Unknown",
-                                                        }
-                                                    }
-                                                }</span>
-                                            </div>
-                                        </div>
-                                    }
-                                }).collect::<Html>()
-                            }}
-                        </div>
-
-                        <div class="account-section">
-                            <div class="account-section-header">
-                                <span>{"Calendar Accounts"}</span>
-                                <span class="account-section-count">{format!("{}/{} ok", calendar_ok, calendar_list.len())}</span>
-                            </div>
-                            {if calendar_list.is_empty() {
-                                html! { <div class="account-empty">{"No calendar accounts connected"}</div> }
-                            } else {
-                                calendar_list.iter().map(|account| {
-                                    let status = status_class(&account.sync_status, account.is_active);
-                                    let email_display = account.email_address.clone().unwrap_or_else(|| account.calendar_id.clone());
-                                    html! {
-                                        <div key={account.id.to_string()} class={format!("account-item {}", status)}>
-                                            <div class="account-info">
-                                                <span class="account-email">{email_display}</span>
-                                                <span class="account-name">{&account.account_name}</span>
-                                            </div>
-                                            <div class="account-status-indicator">
-                                                <span class={format!("status-dot {}", status)}></span>
-                                                <span class="status-text">{
-                                                    if !account.is_active {
-                                                        "Inactive"
-                                                    } else {
-                                                        match account.sync_status.as_str() {
-                                                            "success" => "OK",
-                                                            "syncing" => "Syncing",
-                                                            "pending" => "Pending",
-                                                            "auth_required" => "Auth Required",
-                                                            "failed" => "Failed",
-                                                            _ => "Unknown",
-                                                        }
-                                                    }
-                                                }</span>
+                                                <span class="status-dot status-ok"></span>
+                                                <span class="status-text">{"Connected"}</span>
                                             </div>
                                         </div>
                                     }

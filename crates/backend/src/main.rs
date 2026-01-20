@@ -75,17 +75,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/todos", post(handlers::create_todo))
         .route("/todos/:id", put(handlers::update_todo))
         .route("/todos/:id", delete(handlers::delete_todo))
-        // Email account routes
-        .route("/email-accounts", get(handlers::list_email_accounts))
-        .route("/email-accounts", post(handlers::start_gmail_oauth))
-        .route(
-            "/email-accounts/:id",
-            delete(handlers::delete_email_account),
-        )
-        .route(
-            "/email-accounts/oauth/callback",
-            get(handlers::gmail_oauth_callback),
-        )
+        // Google account routes (for viewing connected accounts)
+        .route("/google-accounts", get(handlers::list_google_accounts))
         // Category routes
         .route("/categories", get(handlers::list_categories))
         .route("/categories", post(handlers::create_category))
@@ -133,20 +124,6 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_this_weeks_events),
         )
         .route("/calendar-events/:id", get(handlers::get_calendar_event))
-        // Calendar account routes
-        .route("/calendar-accounts", get(handlers::list_calendar_accounts))
-        .route(
-            "/calendar-accounts",
-            post(handlers::create_calendar_account),
-        )
-        .route(
-            "/calendar-accounts/:id",
-            delete(handlers::delete_calendar_account),
-        )
-        .route(
-            "/calendar-accounts/:id/toggle",
-            post(handlers::toggle_calendar_account),
-        )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::require_auth,

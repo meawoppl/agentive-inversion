@@ -1,46 +1,20 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    chat_messages (id) {
-        id -> Uuid,
-        role -> Varchar,
-        content -> Text,
-        intent -> Nullable<Varchar>,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    agent_rules (id) {
-        id -> Uuid,
-        name -> Varchar,
-        description -> Nullable<Text>,
-        source_type -> Varchar,
-        rule_type -> Varchar,
-        conditions -> Text,
-        action -> Varchar,
-        action_params -> Nullable<Text>,
-        priority -> Int4,
-        is_active -> Bool,
-        created_from_decision_id -> Nullable<Uuid>,
-        match_count -> Int4,
-        last_matched_at -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     agent_decisions (id) {
         id -> Uuid,
+        #[max_length = 50]
         source_type -> Varchar,
         source_id -> Nullable<Uuid>,
+        #[max_length = 255]
         source_external_id -> Nullable<Varchar>,
+        #[max_length = 50]
         decision_type -> Varchar,
         proposed_action -> Text,
         reasoning -> Text,
         reasoning_details -> Nullable<Text>,
         confidence -> Float4,
+        #[max_length = 50]
         status -> Varchar,
         applied_rule_id -> Nullable<Uuid>,
         result_todo_id -> Nullable<Uuid>,
@@ -52,20 +26,26 @@ diesel::table! {
 }
 
 diesel::table! {
-    calendar_accounts (id) {
+    agent_rules (id) {
         id -> Uuid,
-        account_name -> Varchar,
-        calendar_id -> Varchar,
-        last_synced -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
-        email_address -> Nullable<Varchar>,
-        oauth_refresh_token -> Nullable<Text>,
-        oauth_access_token -> Nullable<Text>,
-        oauth_token_expires_at -> Nullable<Timestamptz>,
-        sync_token -> Nullable<Text>,
-        sync_status -> Varchar,
-        last_sync_error -> Nullable<Text>,
+        #[max_length = 255]
+        name -> Varchar,
+        description -> Nullable<Text>,
+        #[max_length = 50]
+        source_type -> Varchar,
+        #[max_length = 50]
+        rule_type -> Varchar,
+        conditions -> Text,
+        #[max_length = 50]
+        action -> Varchar,
+        action_params -> Nullable<Text>,
+        priority -> Int4,
         is_active -> Bool,
+        created_from_decision_id -> Nullable<Uuid>,
+        match_count -> Int4,
+        last_matched_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -108,33 +88,14 @@ diesel::table! {
 }
 
 diesel::table! {
-    email_accounts (id) {
+    chat_messages (id) {
         id -> Uuid,
-        account_name -> Varchar,
-        email_address -> Varchar,
-        provider -> Varchar,
-        last_synced -> Nullable<Timestamptz>,
+        #[max_length = 20]
+        role -> Varchar,
+        content -> Text,
+        #[max_length = 50]
+        intent -> Nullable<Varchar>,
         created_at -> Timestamptz,
-        oauth_refresh_token -> Nullable<Text>,
-        oauth_access_token -> Nullable<Text>,
-        oauth_token_expires_at -> Nullable<Timestamptz>,
-        last_message_id -> Nullable<Varchar>,
-        sync_status -> Varchar,
-        last_sync_error -> Nullable<Text>,
-        is_active -> Bool,
-    }
-}
-
-diesel::table! {
-    google_accounts (id) {
-        id -> Uuid,
-        email -> Varchar,
-        name -> Nullable<Varchar>,
-        refresh_token -> Text,
-        access_token -> Nullable<Text>,
-        token_expires_at -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
     }
 }
 
@@ -168,6 +129,19 @@ diesel::table! {
 }
 
 diesel::table! {
+    google_accounts (id) {
+        id -> Uuid,
+        email -> Varchar,
+        name -> Nullable<Varchar>,
+        refresh_token -> Text,
+        access_token -> Nullable<Text>,
+        token_expires_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     todos (id) {
         id -> Uuid,
         title -> Varchar,
@@ -184,19 +158,16 @@ diesel::table! {
     }
 }
 
-// Note: agent_decisions and todos have bidirectional FKs, so we can only define one joinable
-diesel::joinable!(emails -> email_accounts (account_id));
-diesel::joinable!(calendar_events -> calendar_accounts (account_id));
+diesel::joinable!(calendar_events -> google_accounts (account_id));
+diesel::joinable!(emails -> google_accounts (account_id));
 diesel::joinable!(todos -> categories (category_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
-    chat_messages,
-    agent_rules,
     agent_decisions,
-    calendar_accounts,
+    agent_rules,
     calendar_events,
     categories,
-    email_accounts,
+    chat_messages,
     emails,
     google_accounts,
     todos,

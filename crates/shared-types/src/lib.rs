@@ -125,15 +125,23 @@ pub struct GoogleAccount {
     pub token_expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub last_sync_error: Option<String>,
+    pub last_sync_error_at: Option<DateTime<Utc>>,
+    pub consecutive_failures: i32,
 }
 
 /// API response for Google account (excludes sensitive tokens)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoogleAccountResponse {
     pub id: Uuid,
     pub email: String,
     pub name: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub last_sync_error: Option<String>,
+    pub last_sync_error_at: Option<DateTime<Utc>>,
+    pub consecutive_failures: i32,
 }
 
 impl From<GoogleAccount> for GoogleAccountResponse {
@@ -143,6 +151,10 @@ impl From<GoogleAccount> for GoogleAccountResponse {
             email: account.email,
             name: account.name,
             created_at: account.created_at,
+            last_synced_at: account.last_synced_at,
+            last_sync_error: account.last_sync_error,
+            last_sync_error_at: account.last_sync_error_at,
+            consecutive_failures: account.consecutive_failures,
         }
     }
 }

@@ -1262,13 +1262,17 @@ pub mod google_accounts {
 
         match existing {
             Some(account) => {
-                // Update existing account
+                // Update existing account; a fresh refresh token means any
+                // previous sync failures are stale, so reset health state
                 diesel::update(google_accounts.filter(id.eq(account.id)))
                     .set((
                         name.eq(name_val),
                         refresh_token.eq(refresh_token_val),
                         access_token.eq(access_token_val),
                         token_expires_at.eq(expires_at),
+                        last_sync_error.eq(None::<String>),
+                        last_sync_error_at.eq(None::<DateTime<Utc>>),
+                        consecutive_failures.eq(0),
                         updated_at.eq(Utc::now()),
                     ))
                     .execute(conn)
@@ -1296,5 +1300,50 @@ pub mod google_accounts {
                 Ok(new_account)
             }
         }
+    }
+
+    /// Record a successful poll: clears any error state
+    pub async fn record_sync_success(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+    ) -> anyhow::Result<()> {
+        use crate::schema::google_accounts::dsl::*;
+
+        diesel::update(google_accounts.filter(id.eq(account_id)))
+            .set((
+                last_synced_at.eq(Utc::now()),
+                last_sync_error.eq(None::<String>),
+                last_sync_error_at.eq(None::<DateTime<Utc>>),
+                consecutive_failures.eq(0),
+                updated_at.eq(Utc::now()),
+            ))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Record a failed poll: stores the error and bumps the failure counter
+    pub async fn record_sync_failure(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+        error_message: &str,
+    ) -> anyhow::Result<()> {
+        use crate::schema::google_accounts::dsl::*;
+
+        // Keep stored errors bounded; truncate on a char boundary
+        let truncated: String = error_message.chars().take(500).collect();
+
+        diesel::update(google_accounts.filter(id.eq(account_id)))
+            .set((
+                last_sync_error.eq(truncated),
+                last_sync_error_at.eq(Utc::now()),
+                consecutive_failures.eq(consecutive_failures + 1),
+                updated_at.eq(Utc::now()),
+            ))
+            .execute(conn)
+            .await?;
+
+        Ok(())
     }
 }

@@ -156,6 +156,20 @@ pub fn app_context_provider(props: &AppContextProviderProps) -> Html {
 // ============================================================================
 
 /// AccountStatus shows connected Google accounts in the header
+/// Format a past timestamp as a short relative time like "3m ago"
+fn format_relative_time(time: &chrono::DateTime<chrono::Utc>) -> String {
+    let elapsed = chrono::Utc::now() - *time;
+    if elapsed.num_seconds() < 60 {
+        "just now".to_string()
+    } else if elapsed.num_minutes() < 60 {
+        format!("{}m ago", elapsed.num_minutes())
+    } else if elapsed.num_hours() < 24 {
+        format!("{}h ago", elapsed.num_hours())
+    } else {
+        format!("{}d ago", elapsed.num_days())
+    }
+}
+
 #[function_component(AccountStatus)]
 fn account_status() -> Html {
     let accounts = use_state(Vec::<GoogleAccountResponse>::new);
@@ -185,12 +199,21 @@ fn account_status() -> Html {
     };
 
     let total_accounts = accounts.len();
+    let error_count = accounts
+        .iter()
+        .filter(|a| a.last_sync_error.is_some())
+        .count();
 
     html! {
         <div class="account-status-container">
             <button class="account-status-btn" onclick={toggle_expanded.clone()}>
                 <span class="account-status-icon">{"@"}</span>
                 <span class="account-status-count">{total_accounts}</span>
+                {if error_count > 0 {
+                    html! { <span class="account-status-alert">{error_count}</span> }
+                } else {
+                    html! {}
+                }}
             </button>
 
             {if *expanded {
@@ -206,8 +229,31 @@ fn account_status() -> Html {
                                 html! { <div class="account-empty">{"No accounts connected"}</div> }
                             } else {
                                 account_list.iter().map(|account| {
+                                    let (item_class, dot_class, status_text, status_title) =
+                                        if let Some(error) = &account.last_sync_error {
+                                            (
+                                                "account-item status-error",
+                                                "status-dot status-error",
+                                                format!("Sync failing ({}x)", account.consecutive_failures),
+                                                error.clone(),
+                                            )
+                                        } else if let Some(synced) = &account.last_synced_at {
+                                            (
+                                                "account-item status-ok",
+                                                "status-dot status-ok",
+                                                format!("Synced {}", format_relative_time(synced)),
+                                                String::new(),
+                                            )
+                                        } else {
+                                            (
+                                                "account-item status-ok",
+                                                "status-dot status-syncing",
+                                                "Waiting for first sync".to_string(),
+                                                String::new(),
+                                            )
+                                        };
                                     html! {
-                                        <div key={account.id.to_string()} class="account-item status-ok">
+                                        <div key={account.id.to_string()} class={item_class}>
                                             <div class="account-info">
                                                 <span class="account-email">{&account.email}</span>
                                                 {if let Some(name) = &account.name {
@@ -216,9 +262,9 @@ fn account_status() -> Html {
                                                     html! {}
                                                 }}
                                             </div>
-                                            <div class="account-status-indicator">
-                                                <span class="status-dot status-ok"></span>
-                                                <span class="status-text">{"Connected"}</span>
+                                            <div class="account-status-indicator" title={status_title}>
+                                                <span class={dot_class}></span>
+                                                <span class="status-text">{status_text}</span>
                                             </div>
                                         </div>
                                     }

@@ -17,7 +17,7 @@
 FROM debian:trixie-slim
 
 RUN apt-get update && \
-    apt-get install -y libpq5 postgresql-client ca-certificates && \
+    apt-get install -y libpq5 postgresql-client ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -41,5 +41,10 @@ RUN chmod +x /app/entrypoint.sh
 ENV FRONTEND_DIR=/app/frontend/dist
 
 EXPOSE 3000
+
+# Surface crash-loops (e.g. a failed migration) as an unhealthy container
+# instead of a silent restart cycle
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
+  CMD curl -fsS http://localhost:3000/health || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]

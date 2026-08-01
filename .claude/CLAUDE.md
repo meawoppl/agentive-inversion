@@ -18,7 +18,7 @@ This is a Rust workspace with 3 crates:
 - Use Diesel ORM for all database operations
 - Migrations are in `/migrations`
 - Run `diesel migration run` after creating new migrations
-- Database URL points to Neon PostgreSQL
+- DATABASE_URL points to PostgreSQL (self-hosted postgres:17 container in production)
 - Schema file is auto-generated at `crates/backend/src/schema.rs`
 - **Avoid JSONB columns** - prefer TEXT columns with JSON strings, or better yet, create proper normalized tables
 - If you need to store structured data, consider creating a separate table with proper columns instead of a JSON blob
@@ -67,7 +67,9 @@ This is a Rust workspace with 3 crates:
 
 ### CI/CD
 - Test workflow: `.github/workflows/ci.yml`
-- Deploy workflow: `.github/workflows/deploy.yml`
+- Container build/push: `.github/workflows/container.yml` (pushes `ghcr.io/meawoppl/agentive-inversion:main`)
+- Deployment is automatic: watchtower on the production host polls the `:main` tag and redeploys within ~5 minutes of a merge. There is no deploy workflow; do not retag the image without coordinating with infrastructure.
+- The container entrypoint runs migrations before starting the server; migrations must be idempotent (use `IF NOT EXISTS` / `IF EXISTS`)
 
 ## Common Commands
 
@@ -124,7 +126,7 @@ cargo clippy --workspace         # Lint code
 ## Environment Variables
 
 Required variables (see `.env.example`):
-- `DATABASE_URL` - Neon PostgreSQL connection string
+- `DATABASE_URL` - PostgreSQL connection string
 - `GOOGLE_CLIENT_ID` - Google OAuth client ID (used for Gmail and Calendar APIs)
 - `GOOGLE_CLIENT_SECRET` - Google OAuth secret
 - `RUST_LOG` - Logging level (info, debug, etc.)

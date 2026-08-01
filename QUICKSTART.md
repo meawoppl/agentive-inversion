@@ -31,7 +31,7 @@ cd agentive-inversion
 ```bash
 cp .env.example .env
 # Edit .env with your actual values:
-# - DATABASE_URL: Your Neon PostgreSQL connection string
+# - DATABASE_URL: Your PostgreSQL connection string
 # - Gmail and Calendar API credentials from Google Cloud Console
 ```
 

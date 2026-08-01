@@ -56,8 +56,7 @@ Responsibilities:
                v                         │ approve/reject
         ┌──────────────┐                 │ in decision inbox
         │  PostgreSQL  │◄────────────────┘
-        │  (Neon)      │     approved decision → todo
-        └──────────────┘
+        └──────────────┘     approved decision → todo
 ```
 
 ## Database Schema
@@ -97,19 +96,25 @@ Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
 ### Development
 - Frontend: `trunk serve` (port 8080, proxies `/api` to the backend)
 - Backend + pollers: `cargo run --bin backend` (port 3000)
-- Database: Neon PostgreSQL (cloud)
+- Database: any PostgreSQL (local or docker-compose)
 
 ### Production
-- Single backend container serves the API, pollers, and built frontend
-- Database: Neon PostgreSQL with connection pooling
+- Merge to main → `container.yml` pushes `ghcr.io/meawoppl/agentive-inversion:main`
+- Watchtower on the production host polls that tag and redeploys automatically
+  (~5 minutes from merge to live); there is no manual deploy step
+- Single backend container serves the API, pollers, and built frontend behind
+  a TLS-terminating reverse proxy
+- Database: self-hosted PostgreSQL 17 container with nightly dumps to S3
+- The container entrypoint runs pending migrations before starting the server,
+  so migrations must be idempotent
 
 ## Security Considerations
 
 1. **Authentication**: Google OAuth2 with CSRF state verification; JWT cookie
    sessions; email allowlist re-checked on every request
-2. **Database**: SSL/TLS connections to Neon (rustls)
-3. **API**: CORS restricted via `CORS_ALLOWED_ORIGINS` in production
-4. **Secrets**: Environment variables, never committed
+2. **API**: CORS restricted via `CORS_ALLOWED_ORIGINS` in production;
+   `RUST_ENV=production` enables the `Secure` cookie flag
+3. **Secrets**: Environment variables, never committed
 
 ## Technology Choices
 
@@ -133,7 +138,3 @@ Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
 - Migration system
 - Async support via diesel-async
 
-### Why Neon?
-- Serverless PostgreSQL
-- Automatic scaling
-- Built-in connection pooling

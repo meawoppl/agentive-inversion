@@ -64,6 +64,13 @@ async fn establish_tls_connection(config: String) -> diesel::ConnectionResult<As
     AsyncPgConnection::try_from(client).await
 }
 
+/// Cheap connectivity check used by /health
+pub async fn ping(pool: &DbPool) -> anyhow::Result<()> {
+    let mut conn = get_conn(pool).await?;
+    diesel::sql_query("SELECT 1").execute(&mut conn).await?;
+    Ok(())
+}
+
 pub fn establish_connection_pool() -> anyhow::Result<DbPool> {
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| anyhow::anyhow!("DATABASE_URL environment variable must be set"))?;

@@ -166,8 +166,18 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn health_check() -> StatusCode {
-    StatusCode::OK
+/// Health check that verifies database connectivity, so an "up" container
+/// that can't reach Postgres still reads as unhealthy
+async fn health_check(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> (StatusCode, &'static str) {
+    match db::ping(&state.pool).await {
+        Ok(()) => (StatusCode::OK, "ok"),
+        Err(e) => {
+            tracing::error!("Health check failed: {:#}", e);
+            (StatusCode::SERVICE_UNAVAILABLE, "database unavailable")
+        }
+    }
 }
 
 /// Build CORS layer based on environment configuration.

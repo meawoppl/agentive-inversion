@@ -14,12 +14,15 @@ until psql "$DATABASE_URL" -c '\q' 2>/dev/null; do
 done
 
 echo "Running database migrations..."
-# Create diesel migrations table if it doesn't exist
-psql "$DATABASE_URL" -c "
+# Create the migrations table, and widen the version column on databases
+# created before it was VARCHAR(255) (CREATE TABLE IF NOT EXISTS won't alter
+# an existing table)
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
 CREATE TABLE IF NOT EXISTS __diesel_schema_migrations (
-    version VARCHAR(50) PRIMARY KEY,
+    version VARCHAR(255) PRIMARY KEY,
     run_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);" 2>/dev/null || true
+);
+ALTER TABLE __diesel_schema_migrations ALTER COLUMN version TYPE VARCHAR(255);"
 
 # Run each migration that hasn't been applied yet
 for migration_dir in /app/migrations/*/; do
@@ -27,12 +30,13 @@ for migration_dir in /app/migrations/*/; do
     version=$(basename "$migration_dir")
 
     # Check if migration has already been applied
-    if ! psql "$DATABASE_URL" -t -c "SELECT 1 FROM __diesel_schema_migrations WHERE version = '$version'" 2>/dev/null | grep -q 1; then
+    if ! psql "$DATABASE_URL" -t -c "SELECT 1 FROM __diesel_schema_migrations WHERE version = '$version'" | grep -q 1; then
       echo "Applying migration: $version"
 
-      if psql "$DATABASE_URL" -f "$migration_dir/up.sql" 2>&1; then
-        # Record successful migration
-        psql "$DATABASE_URL" -c "INSERT INTO __diesel_schema_migrations (version) VALUES ('$version');" 2>/dev/null
+      if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration_dir/up.sql"; then
+        # Record successful migration; a failure here must be loud, since a
+        # silently unrecorded migration re-runs on every restart
+        psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO __diesel_schema_migrations (version) VALUES ('$version');"
         echo "  Applied: $version"
       else
         echo "  FAILED: $version"

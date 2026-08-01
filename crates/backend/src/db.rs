@@ -306,7 +306,9 @@ pub mod emails {
         Ok(count)
     }
 
-    /// Insert a new email, returning None if it already exists (by gmail_id)
+    /// Insert a new email, returning None if this account already has it.
+    /// Gmail ids are only unique per mailbox, so the conflict target must be
+    /// (account_id, gmail_id) — matching the table's unique constraint.
     pub async fn insert(
         conn: &mut AsyncPgConnection,
         new_email: NewEmail,
@@ -315,7 +317,7 @@ pub mod emails {
 
         let result = diesel::insert_into(emails)
             .values(&new_email)
-            .on_conflict(gmail_id)
+            .on_conflict((account_id, gmail_id))
             .do_nothing()
             .get_result::<Email>(conn)
             .await

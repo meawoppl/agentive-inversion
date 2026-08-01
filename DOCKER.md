@@ -217,7 +217,7 @@ This Docker setup is for **testing only**:
 ## Next Steps
 
 Once you've tested the UI:
-1. Set up real database (Neon PostgreSQL)
+1. Set up real database (PostgreSQL)
 2. Configure Google OAuth credentials
 3. Run services individually for development
 4. See [QUICKSTART.md](QUICKSTART.md) for full setup

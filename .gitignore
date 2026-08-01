@@ -42,3 +42,6 @@ inbox_senders.txt
 # Dev script runtime files
 .dev-pids/
 .dev-logs/
+
+# Personal notes - never commit
+BIG_PICTURE.md

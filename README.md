@@ -14,7 +14,7 @@ This project uses a Rust workspace with the following crates:
 
 ### Backend (`crates/backend`)
 - **Framework**: Axum (async web framework)
-- **Database**: Neon PostgreSQL with Diesel ORM
+- **Database**: PostgreSQL with Diesel ORM (self-hosted Postgres 17 container in production)
 - **Purpose**: REST API, plus background pollers (Gmail today, Calendar planned) that run as tokio tasks inside the server process
 - **Port**: 3000
 
@@ -62,7 +62,7 @@ Then open http://localhost:8080 in your browser. See [DOCKER.md](DOCKER.md) for 
 ## Prerequisites
 
 - Rust 1.70+ with `wasm32-unknown-unknown` target
-- PostgreSQL (Neon or local)
+- PostgreSQL (any instance; production uses a self-hosted Postgres 17 container)
 - Diesel CLI: `cargo install diesel_cli --no-default-features --features postgres`
 - Trunk: `cargo install trunk`
 - Google Cloud project with Gmail and Calendar APIs enabled
@@ -84,7 +84,7 @@ cp .env.example .env
 Edit `.env` with your configuration:
 
 ```bash
-DATABASE_URL=postgres://user:password@db.neon.tech/agentive_inversion?sslmode=require
+DATABASE_URL=postgres://user:password@localhost/agentive_inversion
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 ```
@@ -169,9 +169,10 @@ GitHub Actions workflows:
   - Frontend build
   - Database migration tests
 
-- **Deploy** (`deploy.yml`): Runs on main branch
-  - Backend deployment
-  - Frontend deployment
+- **Container** (`container.yml`): Runs on main branch and PRs
+  - Builds backend binary and frontend dist
+  - Pushes the combined image to `ghcr.io/meawoppl/agentive-inversion:main` on merge
+  - Production watches that tag and auto-deploys the new image within ~5 minutes
 
 ## Project Structure
 

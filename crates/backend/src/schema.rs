@@ -138,6 +138,10 @@ diesel::table! {
         token_expires_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        last_synced_at -> Nullable<Timestamptz>,
+        last_sync_error -> Nullable<Text>,
+        last_sync_error_at -> Nullable<Timestamptz>,
+        consecutive_failures -> Int4,
     }
 }
 

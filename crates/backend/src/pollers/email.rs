@@ -148,6 +148,17 @@ async fn run_poll_cycle(
             continue;
         }
 
+        // Exponential backoff for accounts that keep failing
+        if let Some(remaining) = backoff_remaining(&account, config.poll_interval) {
+            tracing::debug!(
+                "Skipping {} (backing off after {} failures, {}s remaining)",
+                account.email,
+                account.consecutive_failures,
+                remaining.num_seconds()
+            );
+            continue;
+        }
+
         // Get or create account state
         let state = account_states.entry(account.id).or_default();
 
@@ -163,9 +174,31 @@ async fn run_poll_cycle(
                 }
 
                 rate_limiter.record_poll(&account.email);
+
+                if let Err(e) =
+                    db::google_accounts::record_sync_success(&mut conn, account.id).await
+                {
+                    tracing::warn!("Failed to record sync success for {}: {}", account.email, e);
+                }
             }
             Err(e) => {
-                tracing::error!("Failed to poll {}: {}", account.email, e);
+                tracing::error!("Failed to poll {}: {:#}", account.email, e);
+
+                rate_limiter.record_poll(&account.email);
+
+                if let Err(db_err) = db::google_accounts::record_sync_failure(
+                    &mut conn,
+                    account.id,
+                    &format!("{e:#}"),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "Failed to record sync failure for {}: {}",
+                        account.email,
+                        db_err
+                    );
+                }
             }
         }
     }
@@ -190,6 +223,28 @@ async fn run_poll_cycle(
     }
 
     Ok(())
+}
+
+/// Maximum backoff between retries of a failing account
+const MAX_BACKOFF: Duration = Duration::from_secs(4 * 60 * 60);
+
+/// If the account has been failing, return how long until the next retry
+/// is allowed. Backoff doubles with each consecutive failure, starting at
+/// the poll interval and capped at [`MAX_BACKOFF`].
+fn backoff_remaining(account: &GoogleAccount, poll_interval: Duration) -> Option<chrono::Duration> {
+    if account.consecutive_failures <= 0 {
+        return None;
+    }
+    let error_at = account.last_sync_error_at?;
+
+    let exponent = (account.consecutive_failures - 1).min(10) as u32;
+    let backoff = poll_interval
+        .saturating_mul(2u32.saturating_pow(exponent))
+        .min(MAX_BACKOFF);
+    let backoff = chrono::Duration::from_std(backoff).ok()?;
+
+    let remaining = error_at + backoff - Utc::now();
+    (remaining > chrono::Duration::zero()).then_some(remaining)
 }
 
 struct PollResult {
@@ -319,4 +374,61 @@ fn parse_from_header(from: &str) -> (String, Option<String>) {
     }
 
     (from.to_string(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(failures: i32, error_secs_ago: Option<i64>) -> GoogleAccount {
+        GoogleAccount {
+            id: Uuid::new_v4(),
+            email: "test@example.com".to_string(),
+            name: None,
+            refresh_token: "token".to_string(),
+            access_token: None,
+            token_expires_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_synced_at: None,
+            last_sync_error: failures.gt(&0).then(|| "boom".to_string()),
+            last_sync_error_at: error_secs_ago.map(|s| Utc::now() - chrono::Duration::seconds(s)),
+            consecutive_failures: failures,
+        }
+    }
+
+    const INTERVAL: Duration = Duration::from_secs(300);
+
+    #[test]
+    fn healthy_account_has_no_backoff() {
+        assert!(backoff_remaining(&account(0, None), INTERVAL).is_none());
+    }
+
+    #[test]
+    fn recent_failure_backs_off() {
+        let remaining = backoff_remaining(&account(1, Some(10)), INTERVAL).unwrap();
+        assert!(remaining.num_seconds() <= 290);
+        assert!(remaining.num_seconds() > 200);
+    }
+
+    #[test]
+    fn backoff_expires_after_interval() {
+        assert!(backoff_remaining(&account(1, Some(301)), INTERVAL).is_none());
+    }
+
+    #[test]
+    fn backoff_doubles_with_failures() {
+        // 3 failures -> 4x poll interval = 1200s
+        let remaining = backoff_remaining(&account(3, Some(10)), INTERVAL).unwrap();
+        assert!(remaining.num_seconds() > 1100);
+        assert!(remaining.num_seconds() <= 1190);
+    }
+
+    #[test]
+    fn backoff_is_capped() {
+        // 20 failures would be ~4 years uncapped; must be <= 4h
+        let remaining = backoff_remaining(&account(20, Some(0)), INTERVAL).unwrap();
+        assert!(remaining.num_seconds() <= 4 * 60 * 60);
+        assert!(remaining.num_seconds() > 4 * 60 * 60 - 60);
+    }
 }

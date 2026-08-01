@@ -70,6 +70,7 @@ This is a Rust workspace with 3 crates:
 - Container build/push: `.github/workflows/container.yml` (pushes `ghcr.io/meawoppl/agentive-inversion:main`)
 - Deployment is automatic: watchtower on the production host polls the `:main` tag and redeploys within ~5 minutes of a merge. There is no deploy workflow; do not retag the image without coordinating with infrastructure.
 - The container entrypoint runs migrations before starting the server; migrations must be idempotent (use `IF NOT EXISTS` / `IF EXISTS`)
+- Upsert conflict targets must match an actual unique constraint on the table (e.g. emails is UNIQUE(account_id, gmail_id), not gmail_id alone) — Postgres rejects the INSERT at runtime otherwise, and Diesel won't catch it at compile time
 
 ## Common Commands
 

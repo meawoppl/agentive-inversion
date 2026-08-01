@@ -288,6 +288,8 @@ async fn save_emails_to_db(
 ) -> Result<usize> {
     let mut conn = pool.get().await.context("Failed to get DB connection")?;
     let mut count = 0;
+    let mut failed = 0;
+    let mut last_error = None;
 
     for email in emails {
         // Parse "From" header into address and name
@@ -348,8 +350,19 @@ async fn save_emails_to_db(
             }
             Err(e) => {
                 tracing::warn!("  Failed to store {}: {}", email.id, e);
+                failed += 1;
+                last_error = Some(e);
             }
         }
+    }
+
+    // A fully-failed batch means something systemic (schema mismatch, dead
+    // connection) — surface it as a poll failure so account health shows it,
+    // rather than logging per-message warnings and reporting success
+    if failed > 0 && failed == emails.len() {
+        return Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("unknown insert error"))
+            .context(format!("all {failed} email inserts failed")));
     }
 
     Ok(count)

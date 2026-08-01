@@ -8,7 +8,6 @@
 #   GOOGLE_CLIENT_ID      - Google OAuth client ID
 #   GOOGLE_CLIENT_SECRET  - Google OAuth client secret
 #   AUTH_REDIRECT_URI     - OAuth callback URL (e.g., https://your-domain.com/api/auth/callback)
-#   OAUTH_REDIRECT_URI    - Gmail API callback URL (e.g., https://your-domain.com/api/email-accounts/oauth/callback)
 #
 # Optional environment variables:
 #   RUST_LOG              - Log level (default: info)

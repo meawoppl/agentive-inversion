@@ -94,8 +94,8 @@ docker-compose exec postgres psql -U testuser -d agentive_inversion
 
 # Example queries
 SELECT * FROM todos;
-SELECT * FROM email_accounts;
-SELECT * FROM calendar_accounts;
+SELECT * FROM google_accounts;
+SELECT * FROM emails;
 ```
 
 ### Reset Database

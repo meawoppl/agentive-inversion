@@ -68,7 +68,7 @@ docker-compose exec postgres psql -U testuser -d agentive_inversion
 
 # Then run queries:
 SELECT * FROM todos;
-SELECT * FROM email_accounts;
+SELECT * FROM google_accounts;
 ```
 
 **Services won't start?**

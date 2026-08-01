@@ -15,38 +15,34 @@ This project uses a Rust workspace with the following crates:
 ### Backend (`crates/backend`)
 - **Framework**: Axum (async web framework)
 - **Database**: Neon PostgreSQL with Diesel ORM
-- **Purpose**: REST API for todo CRUD operations
+- **Purpose**: REST API, plus background pollers (Gmail today, Calendar planned) that run as tokio tasks inside the server process
 - **Port**: 3000
 
 ### Shared Types (`crates/shared-types`)
 - Common data structures used across all crates
-- Includes models for todos, email accounts, and calendar accounts
+- Includes models for todos, google accounts, emails, calendar events, agent decisions, and rules
 - Serialization support for both API and database
-
-### Email Poller (`crates/email-poller`)
-- **Purpose**: Polls multiple Gmail accounts for new emails that should become todos
-- **Interval**: Every 5 minutes
-- **API**: Google Gmail API with OAuth2
-
-### Calendar Poller (`crates/calendar-poller`)
-- **Purpose**: Polls Google Calendar for upcoming events
-- **Interval**: Every 5 minutes
-- **API**: Google Calendar API with OAuth2
 
 ## Data Flow
 
 ```
-Gmail Accounts → Email Poller → Database ← Backend API ← Frontend
-                                    ↑
-Calendar APIs → Calendar Poller ────┘
+Gmail Accounts → Email Poller (in backend) → Database ← Backend API ← Frontend
 ```
+
+Emails are classified by agent rules plus a keyword heuristic. Actionable ones
+become pending decisions in the decision inbox; approving a decision creates a todo.
 
 ## Database Schema
 
 ### Tables
 - **todos**: Main todo items with source tracking
-- **email_accounts**: Configured Gmail accounts
-- **calendar_accounts**: Configured Google Calendar accounts
+- **google_accounts**: Connected Google accounts (OAuth refresh tokens for Gmail and Calendar)
+- **emails**: Fetched email metadata and bodies
+- **calendar_events**: Google Calendar events (poller not yet implemented)
+- **categories**: Todo categories
+- **agent_decisions**: Proposed actions awaiting review in the decision inbox
+- **agent_rules**: User-defined rules for automatic email classification
+- **chat_messages**: Chat widget history
 
 ### Todo Sources
 - `Manual`: User-created todos
@@ -109,7 +105,7 @@ rustup target add wasm32-unknown-unknown
 
 ### Run All Services Locally
 
-Terminal 1 - Backend:
+Terminal 1 - Backend (includes the email poller):
 ```bash
 cargo run --bin backend
 ```
@@ -118,16 +114,6 @@ Terminal 2 - Frontend:
 ```bash
 cd crates/frontend
 trunk serve
-```
-
-Terminal 3 - Email Poller:
-```bash
-cargo run --bin email-poller
-```
-
-Terminal 4 - Calendar Poller:
-```bash
-cargo run --bin calendar-poller
 ```
 
 ### Run Tests
@@ -194,11 +180,9 @@ agentive-inversion/
 ├── .github/
 │   └── workflows/          # GitHub Actions
 ├── crates/
-│   ├── backend/           # Axum REST API
+│   ├── backend/           # Axum REST API + background pollers
 │   ├── frontend/          # Yew WASM app
-│   ├── shared-types/      # Common types
-│   ├── email-poller/      # Gmail integration
-│   └── calendar-poller/   # Calendar integration
+│   └── shared-types/      # Common types
 ├── migrations/            # Diesel migrations
 ├── Cargo.toml            # Workspace config
 ├── diesel.toml           # Diesel config

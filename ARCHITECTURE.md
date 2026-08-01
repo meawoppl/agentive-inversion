@@ -8,198 +8,108 @@
 **Port**: 8080 (dev server)
 
 Responsibilities:
-- Render todo list UI
-- Handle user interactions (create, update, delete todos)
-- Communicate with backend REST API
-- Real-time UI updates
+- Decision inbox: review, approve, or reject agent-proposed todos
+- Todo list UI (create, update, delete, sort, categorize)
+- Decision log, category manager, calendar views, chat widget
+- Google login flow and connected-account status
 
 ### 2. Backend (Axum)
 **Location**: `crates/backend`
-**Tech Stack**: Axum, Tokio, Diesel
+**Tech Stack**: Axum, Tokio, Diesel (async), yup-oauth2
 **Port**: 3000
 
 Responsibilities:
-- REST API for todo operations
-- Database access layer
-- Authentication (future)
-- Data validation
+- REST API under `/api` (todos, emails, decisions, rules, categories,
+  calendar events, chat, google accounts)
+- Google OAuth login with JWT cookie sessions and an email allowlist
+- Serving the built frontend as static files (SPA fallback)
+- **Email poller** (tokio background task): polls Gmail for every connected
+  account, stores emails, classifies them via agent rules plus a keyword
+  heuristic, and creates pending decisions
+- **Calendar poller** (tokio background task): currently a stub
 
-API Endpoints:
-```
-GET    /health              - Health check
-GET    /api/todos           - List all todos
-POST   /api/todos           - Create new todo
-PUT    /api/todos/:id       - Update todo
-DELETE /api/todos/:id       - Delete todo
-```
-
-### 3. Email Poller Service
-**Location**: `crates/email-poller`
-**Tech Stack**: async-imap, Google Gmail API, OAuth2
-
-Responsibilities:
-- Poll multiple Gmail accounts every 5 minutes
-- Parse emails for actionable items
-- Create todos in database
-- Track last sync time per account
-
-### 4. Calendar Poller Service
-**Location**: `crates/calendar-poller`
-**Tech Stack**: Google Calendar API, OAuth2
-
-Responsibilities:
-- Poll Google Calendar events every 5 minutes
-- Extract upcoming events
-- Create/update todos from events
-- Sync event changes
-
-### 5. Shared Types
+### 3. Shared Types
 **Location**: `crates/shared-types`
-**Tech Stack**: Serde, Diesel
+**Tech Stack**: Serde, Diesel (behind a feature flag so it also compiles to WASM)
 
 Responsibilities:
-- Common data structures
-- Serialization/deserialization
-- Database models
+- Domain models: todos, google accounts, emails, calendar events,
+  agent decisions, agent rules, chat messages
 - API request/response types
+- The rule engine used for email classification
 
 ## Data Flow
 
 ```
 ┌─────────────────┐
-│  Gmail Accounts │
+│  Gmail Accounts │  (one row per account in google_accounts)
 └────────┬────────┘
-         │
-         │ (Gmail API)
-         │
+         │ Gmail API (OAuth2 refresh tokens)
          v
-┌──────────────────┐
-│  Email Poller    │
-│  (every 5 min)   │
-└────────┬─────────┘
-         │
-         │
-         v
-    ┌────────────────────┐
-    │                    │
-    │   PostgreSQL       │◄─────┐
-    │   (Neon DB)        │      │
-    │                    │      │
-    └────────┬───────────┘      │
-             │                  │
-             │                  │
-         ┌───▼──────┐      ┌────┴─────────┐
-         │          │      │              │
-         │ Backend  │◄─────┤  Frontend    │
-         │ (Axum)   │      │  (Yew)       │
-         │          │      │              │
-         └──────────┘      └──────────────┘
-             ▲
-             │
-         ┌───┴─────────┐
-         │             │
-         │  Calendar   │
-         │  Poller     │
-         │ (every 5min)│
-         └──────▲──────┘
-                │
-                │ (Calendar API)
-                │
-      ┌─────────┴──────────┐
-      │  Google Calendars  │
-      └────────────────────┘
+┌───────────────────────────────┐
+│  Backend (Axum)               │
+│  ├── email poller task        │──► emails table
+│  ├── classifier (rules +      │──► agent_decisions (pending)
+│  │    keyword heuristic)      │
+│  └── REST API ◄───────────────┼──── Frontend (Yew)
+└──────────────┬────────────────┘        │
+               v                         │ approve/reject
+        ┌──────────────┐                 │ in decision inbox
+        │  PostgreSQL  │◄────────────────┘
+        │  (Neon)      │     approved decision → todo
+        └──────────────┘
 ```
 
 ## Database Schema
 
-### todos table
-```sql
-id              UUID PRIMARY KEY
-title           VARCHAR NOT NULL
-description     TEXT
-completed       BOOLEAN DEFAULT FALSE
-source          todo_source_type NOT NULL
-source_id       VARCHAR
-due_date        TIMESTAMP WITH TIME ZONE
-created_at      TIMESTAMP WITH TIME ZONE
-updated_at      TIMESTAMP WITH TIME ZONE
-```
+Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
 
-Indexes:
-- `idx_todos_completed` on `completed`
-- `idx_todos_due_date` on `due_date`
-- `idx_todos_source` on `source`
+- **todos** — id, title, description, completed, source (varchar), source_id,
+  due_date, link, category_id → categories, decision_id → agent_decisions
+- **google_accounts** — id, email (unique), name, refresh_token, access_token,
+  token_expires_at
+- **emails** — id, account_id → google_accounts, gmail_id, thread_id, headers,
+  subject/from/to/cc, snippet, body_text, body_html, labels, received_at,
+  processed flags. UNIQUE(account_id, gmail_id)
+- **calendar_events** — id, account_id → google_accounts, google_event_id,
+  summary, times, recurrence, attendees, processed flags.
+  UNIQUE(account_id, google_event_id)
+- **categories** — id, name (unique), color
+- **agent_decisions** — proposed actions with reasoning, confidence, and
+  status (proposed / approved / rejected / auto_approved / executed)
+- **agent_rules** — user-defined classification rules (conditions as JSON
+  text, action, priority, match tracking)
+- **chat_messages** — chat widget history
 
-### email_accounts table
-```sql
-id              UUID PRIMARY KEY
-account_name    VARCHAR NOT NULL
-email_address   VARCHAR NOT NULL UNIQUE
-provider        VARCHAR NOT NULL
-last_synced     TIMESTAMP WITH TIME ZONE
-created_at      TIMESTAMP WITH TIME ZONE
-```
+## Authentication
 
-### calendar_accounts table
-```sql
-id              UUID PRIMARY KEY
-account_name    VARCHAR NOT NULL
-calendar_id     VARCHAR NOT NULL UNIQUE
-last_synced     TIMESTAMP WITH TIME ZONE
-created_at      TIMESTAMP WITH TIME ZONE
-```
-
-### Custom Types
-```sql
-CREATE TYPE todo_source_type AS ENUM ('manual', 'email', 'calendar');
-```
-
-## Service Communication
-
-### Frontend ↔ Backend
-- Protocol: HTTP/REST
-- Format: JSON
-- CORS enabled for local development
-
-### Pollers → Database
-- Direct database access via Diesel
-- No HTTP layer needed
-- Independent processes
-
-### External APIs
-- Gmail API: OAuth2 authentication
-- Calendar API: OAuth2 authentication
-- Credentials stored in environment variables
+- Single Google OAuth flow grants login plus Gmail and Calendar scopes
+  (`gmail.modify`, `calendar`).
+- Callback verifies a CSRF state cookie, checks the `ALLOWED_EMAILS`
+  allowlist, stores the refresh token in `google_accounts`, and sets an
+  HttpOnly JWT cookie (7-day expiry, sliding refresh).
+- Connecting an additional Gmail account = logging in with it once.
+- Pollers authenticate to Google APIs with the stored refresh tokens via
+  yup-oauth2.
 
 ## Deployment Architecture
 
 ### Development
-- Frontend: `trunk serve` (port 8080)
-- Backend: `cargo run --bin backend` (port 3000)
-- Email Poller: `cargo run --bin email-poller`
-- Calendar Poller: `cargo run --bin calendar-poller`
+- Frontend: `trunk serve` (port 8080, proxies `/api` to the backend)
+- Backend + pollers: `cargo run --bin backend` (port 3000)
 - Database: Neon PostgreSQL (cloud)
 
-### Production (Future)
-- Frontend: Static files served via CDN
-- Backend: Container deployment
-- Pollers: Background services/cron jobs
+### Production
+- Single backend container serves the API, pollers, and built frontend
 - Database: Neon PostgreSQL with connection pooling
 
 ## Security Considerations
 
-1. **Authentication**: OAuth2 for Google services
-2. **Database**: SSL/TLS connections to Neon
-3. **API**: CORS configuration for production
+1. **Authentication**: Google OAuth2 with CSRF state verification; JWT cookie
+   sessions; email allowlist re-checked on every request
+2. **Database**: SSL/TLS connections to Neon (rustls)
+3. **API**: CORS restricted via `CORS_ALLOWED_ORIGINS` in production
 4. **Secrets**: Environment variables, never committed
-5. **Tokens**: Stored securely, auto-refresh
-
-## Scaling Considerations
-
-1. **Database**: Connection pooling via diesel-async
-2. **Pollers**: Rate limiting to respect API quotas
-3. **Backend**: Stateless design for horizontal scaling
-4. **Frontend**: WASM bundle size optimization
 
 ## Technology Choices
 
@@ -207,17 +117,14 @@ CREATE TYPE todo_source_type AS ENUM ('manual', 'email', 'calendar');
 - Type safety across entire stack
 - Performance (backend and WASM frontend)
 - Excellent async support
-- Strong ecosystem
 
 ### Why Yew?
 - Native Rust for frontend
 - Component-based architecture
 - Type-safe props
-- Great developer experience
 
 ### Why Axum?
 - Modern async web framework
-- Excellent ergonomics
 - Type-safe routing
 - Good ecosystem integration
 
@@ -225,10 +132,8 @@ CREATE TYPE todo_source_type AS ENUM ('manual', 'email', 'calendar');
 - Compile-time query checking
 - Migration system
 - Async support via diesel-async
-- Type-safe schema
 
 ### Why Neon?
 - Serverless PostgreSQL
 - Automatic scaling
 - Built-in connection pooling
-- Great for development and production

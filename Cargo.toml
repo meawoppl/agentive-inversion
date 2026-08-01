@@ -4,8 +4,6 @@ members = [
     "crates/frontend",
     "crates/backend",
     "crates/shared-types",
-    "crates/email-poller",
-    "crates/calendar-poller",
 ]
 
 [workspace.package]

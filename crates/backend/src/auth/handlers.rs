@@ -14,16 +14,27 @@ use crate::AppState;
 
 use super::{
     build_auth_cookie, extract_auth_user, jwt,
+    middleware::extract_cookie_value,
     types::{AuthUserResponse, LoginInitResponse},
 };
 
+const OAUTH_STATE_COOKIE: &str = "oauth_state";
+
+fn secure_cookie_suffix() -> &'static str {
+    if std::env::var("RUST_ENV").unwrap_or_default() == "production" {
+        "; Secure"
+    } else {
+        ""
+    }
+}
+
 /// Start Google OAuth login flow.
 ///
-/// Returns a URL that the frontend should redirect the user to.
-pub async fn auth_login(State(state): State<AppState>) -> ApiResult<Json<LoginInitResponse>> {
+/// Returns a URL that the frontend should redirect the user to, and sets a
+/// short-lived cookie holding the CSRF state for verification in the callback.
+pub async fn auth_login(State(state): State<AppState>) -> ApiResult<Response> {
     let config = &state.auth_config;
 
-    // Generate state parameter (for CSRF protection in production, you'd want to store this)
     let csrf_state = uuid::Uuid::new_v4().to_string();
 
     // Request scopes for login (openid, email, profile) plus Gmail and Calendar access
@@ -51,13 +62,23 @@ pub async fn auth_login(State(state): State<AppState>) -> ApiResult<Json<LoginIn
         csrf_state
     );
 
-    Ok(Json(LoginInitResponse { auth_url }))
+    let state_cookie = format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600{}",
+        OAUTH_STATE_COOKIE,
+        csrf_state,
+        secure_cookie_suffix()
+    );
+
+    Ok((
+        [(header::SET_COOKIE, state_cookie)],
+        Json(LoginInitResponse { auth_url }),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AuthCallbackParams {
     pub code: String,
-    #[allow(dead_code)]
     pub state: String,
 }
 
@@ -81,15 +102,33 @@ struct GoogleUserInfo {
 /// Also creates/updates email and calendar accounts with OAuth tokens.
 pub async fn auth_callback(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<AuthCallbackParams>,
 ) -> Response {
-    match handle_callback_inner(&state, params).await {
-        Ok(response) => response,
-        Err(e) => {
-            tracing::error!("Auth callback error: {:?}", e);
-            Redirect::to("/?auth_error=auth_failed").into_response()
+    let expected_state = extract_cookie_value(&headers, OAUTH_STATE_COOKIE);
+    let mut response = if expected_state.as_deref() != Some(params.state.as_str()) {
+        tracing::warn!("OAuth callback state mismatch - possible CSRF attempt");
+        Redirect::to("/?auth_error=invalid_state").into_response()
+    } else {
+        match handle_callback_inner(&state, params).await {
+            Ok(response) => response,
+            Err(e) => {
+                tracing::error!("Auth callback error: {:?}", e);
+                Redirect::to("/?auth_error=auth_failed").into_response()
+            }
         }
+    };
+
+    // The state cookie is single-use; clear it regardless of outcome
+    let clear_cookie = format!(
+        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        OAUTH_STATE_COOKIE,
+        secure_cookie_suffix()
+    );
+    if let Ok(value) = clear_cookie.parse() {
+        response.headers_mut().append(header::SET_COOKIE, value);
     }
+    response
 }
 
 async fn handle_callback_inner(

@@ -43,9 +43,9 @@ diesel migration run
 
 ### 4. Start All Services
 
-Open 4 terminal windows:
+Open 2 terminal windows:
 
-**Terminal 1 - Backend:**
+**Terminal 1 - Backend (includes the email poller):**
 ```bash
 cargo run --bin backend
 # Backend will start on http://localhost:3000
@@ -56,18 +56,6 @@ cargo run --bin backend
 cd crates/frontend
 trunk serve
 # Frontend will start on http://localhost:8080
-```
-
-**Terminal 3 - Email Poller:**
-```bash
-cargo run --bin email-poller
-# Polls Gmail every 5 minutes
-```
-
-**Terminal 4 - Calendar Poller:**
-```bash
-cargo run --bin calendar-poller
-# Polls Google Calendar every 5 minutes
 ```
 
 ### 5. Access the Application

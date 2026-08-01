@@ -140,14 +140,8 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-frontend-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Cache trunk
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/trunk
-          key: ${{ runner.os }}-trunk-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Install Trunk
-        run: command -v trunk || cargo install trunk
+        run: wget -qO- https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xzf- -C ~/.cargo/bin
 
       - name: Build frontend
         run: cd crates/frontend && trunk build --release

@@ -878,7 +878,7 @@ impl RuleEngine {
             .collect();
 
         // Sort by priority (highest first)
-        results.sort_by(|a, b| b.priority.cmp(&a.priority));
+        results.sort_by_key(|r| std::cmp::Reverse(r.priority));
         results
     }
 

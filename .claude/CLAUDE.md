@@ -2,12 +2,10 @@
 
 ## Architecture Overview
 
-This is a Rust workspace with 5 crates:
-1. `backend` - Axum REST API server
+This is a Rust workspace with 3 crates:
+1. `backend` - Axum REST API server, plus background pollers (Gmail today, Calendar stubbed) running as tokio tasks in `crates/backend/src/pollers/`
 2. `frontend` - Yew WASM application
 3. `shared-types` - Common types shared across crates
-4. `email-poller` - Gmail polling service
-5. `calendar-poller` - Google Calendar polling service
 
 ## Development Patterns
 
@@ -75,10 +73,8 @@ This is a Rust workspace with 5 crates:
 
 ### Development
 ```bash
-cargo run --bin backend          # Start backend server
+cargo run --bin backend          # Start backend server (includes pollers)
 cd crates/frontend && trunk serve  # Start frontend dev server
-cargo run --bin email-poller     # Start email poller
-cargo run --bin calendar-poller  # Start calendar poller
 ```
 
 ### Testing
@@ -121,10 +117,9 @@ cargo clippy --workspace         # Lint code
 - CORS enabled for frontend
 
 ### Poller Services
-- Run as separate processes
+- Run as tokio background tasks inside the backend process
 - Write directly to database
-- No HTTP communication needed
-- Independent retry logic
+- Spawned from `crates/backend/src/main.rs`
 
 ## Environment Variables
 

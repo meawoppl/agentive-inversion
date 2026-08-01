@@ -26,7 +26,7 @@ pub async fn require_auth(
     let config = &state.auth_config;
 
     // Try to get token from cookie first, then Authorization header
-    let token = extract_token_from_cookie(request.headers(), &config.cookie_name)
+    let token = extract_cookie_value(request.headers(), &config.cookie_name)
         .or_else(|| extract_token_from_header(request.headers()));
 
     let token = match token {
@@ -90,7 +90,10 @@ pub async fn require_auth(
     response
 }
 
-fn extract_token_from_cookie(headers: &axum::http::HeaderMap, cookie_name: &str) -> Option<String> {
+pub(crate) fn extract_cookie_value(
+    headers: &axum::http::HeaderMap,
+    cookie_name: &str,
+) -> Option<String> {
     let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
 
     for cookie_str in cookie_header.split(';') {
@@ -134,7 +137,7 @@ pub fn extract_auth_user(
     headers: &axum::http::HeaderMap,
     config: &AuthConfig,
 ) -> Result<AuthUser, (StatusCode, Json<ErrorResponse>)> {
-    let token = extract_token_from_cookie(headers, &config.cookie_name)
+    let token = extract_cookie_value(headers, &config.cookie_name)
         .or_else(|| extract_token_from_header(headers))
         .ok_or_else(|| {
             (

@@ -385,6 +385,14 @@ async fn run_stage(
     timeout: Duration,
     credential: &TriageCredential,
 ) -> Result<()> {
+    // Explicit stage-start marker so a session's run window is observed, not
+    // inferred from the previous stage's completion — makes memory/profile
+    // attribution unambiguous even for the first stage of a cycle.
+    tracing::info!(
+        "Triage session starting: model={model} emails={}",
+        emails.len()
+    );
+
     let workdir = tempfile::tempdir().context("Failed to create session workdir")?;
 
     std::fs::write(

@@ -203,7 +203,6 @@ agentive-inversion/
 │   └── check-migration-names.sh  # CI lint for migration directory names
 ├── Cargo.toml            # Workspace config
 ├── diesel.toml           # Diesel config
-├── .cargo/audit.toml     # cargo-audit suppressions
 └── .env.example          # Environment template
 ```
 

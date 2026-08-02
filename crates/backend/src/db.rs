@@ -54,15 +54,12 @@ async fn establish_tls_connection(config: String) -> diesel::ConnectionResult<As
         .await
         .map_err(|e| diesel::ConnectionError::BadConnection(e.to_string()))?;
 
-    // Spawn the connection task
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tracing::error!("Connection error: {}", e);
-        }
-    });
-
-    // Build the async connection from the tokio-postgres client
-    AsyncPgConnection::try_from(client).await
+    // Hand both halves to diesel rather than spawning the connection task
+    // ourselves: it drives the connection, propagates connection errors back
+    // through the pooled connection, and shuts the task down when the
+    // connection is dropped. The previous `tokio::spawn` + `try_from(client)`
+    // only logged those errors, so a dead socket looked healthy to the pool.
+    AsyncPgConnection::try_from_client_and_connection(client, connection).await
 }
 
 /// Cheap connectivity check used by /health

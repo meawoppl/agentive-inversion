@@ -223,6 +223,8 @@ pub mod emails {
         pub processed: bool,
         pub processed_at: Option<DateTime<Utc>>,
         pub archived_in_gmail: bool,
+        pub triage_status: String,
+        pub triaged_at: Option<DateTime<Utc>>,
     }
 
     pub async fn list_all(
@@ -339,6 +341,104 @@ pub mod emails {
             .await?;
 
         Ok(())
+    }
+
+    /// List emails awaiting triage by the agent pipeline, oldest first
+    pub async fn list_pending_triage(
+        conn: &mut AsyncPgConnection,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Email>> {
+        use crate::schema::emails::dsl::*;
+
+        let items = emails
+            .filter(triage_status.eq("pending"))
+            .order_by(fetched_at.asc())
+            .limit(limit)
+            .load::<Email>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
+    /// Record the triage pipeline's disposition for an email
+    pub async fn set_triage_status(
+        conn: &mut AsyncPgConnection,
+        email_id: Uuid,
+        status: &str,
+    ) -> anyhow::Result<()> {
+        use crate::schema::emails::dsl::*;
+
+        diesel::update(emails.filter(id.eq(email_id)))
+            .set((triage_status.eq(status), triaged_at.eq(Some(Utc::now()))))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Record that the email was archived in Gmail by the agent
+    pub async fn mark_archived_in_gmail(
+        conn: &mut AsyncPgConnection,
+        email_id: Uuid,
+    ) -> anyhow::Result<()> {
+        use crate::schema::emails::dsl::*;
+
+        diesel::update(emails.filter(id.eq(email_id)))
+            .set(archived_in_gmail.eq(true))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Counts by triage status for the pipeline display
+    pub async fn triage_status_counts(
+        conn: &mut AsyncPgConnection,
+    ) -> anyhow::Result<Vec<(String, i64)>> {
+        use crate::schema::emails::dsl::*;
+        use diesel::dsl::count_star;
+
+        let counts = emails
+            .group_by(triage_status)
+            .select((triage_status, count_star()))
+            .load::<(String, i64)>(conn)
+            .await?;
+
+        Ok(counts)
+    }
+}
+
+// Personal-context document read by the triage agent (single-row table)
+pub mod about_me {
+    use super::*;
+
+    #[derive(Debug, Clone, Queryable)]
+    pub struct AboutMe {
+        #[allow(dead_code)] // required for positional Queryable mapping
+        pub id: i32,
+        pub content: String,
+        pub updated_at: DateTime<Utc>,
+    }
+
+    pub async fn get(conn: &mut AsyncPgConnection) -> anyhow::Result<AboutMe> {
+        use crate::schema::about_me::dsl::*;
+
+        let doc = about_me.filter(id.eq(1)).first::<AboutMe>(conn).await?;
+        Ok(doc)
+    }
+
+    pub async fn update(
+        conn: &mut AsyncPgConnection,
+        new_content: &str,
+    ) -> anyhow::Result<AboutMe> {
+        use crate::schema::about_me::dsl::*;
+
+        let doc = diesel::update(about_me.filter(id.eq(1)))
+            .set((content.eq(new_content), updated_at.eq(Utc::now())))
+            .get_result::<AboutMe>(conn)
+            .await?;
+
+        Ok(doc)
     }
 }
 
@@ -1250,6 +1350,22 @@ pub mod google_accounts {
             .await?;
 
         Ok(accounts)
+    }
+
+    /// Look up an account by email address
+    pub async fn get_by_email(
+        conn: &mut AsyncPgConnection,
+        email_addr: &str,
+    ) -> anyhow::Result<Option<GoogleAccount>> {
+        use crate::schema::google_accounts::dsl::*;
+
+        let account = google_accounts
+            .filter(email.eq(email_addr))
+            .first::<GoogleAccount>(conn)
+            .await
+            .optional()?;
+
+        Ok(account)
     }
 
     pub async fn upsert(

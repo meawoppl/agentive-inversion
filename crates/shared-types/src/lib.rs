@@ -290,6 +290,44 @@ pub struct EmailResponse {
     pub received_at: DateTime<Utc>,
     pub processed: bool,
     pub archived_in_gmail: bool,
+    pub triage_status: String,
+}
+
+/// Personal-context document the triage agent reads before proposing actions
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AboutMeResponse {
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request to replace the about-me document
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAboutMeRequest {
+    pub content: String,
+}
+
+/// Request to create an event on the agent calendar (executed by the backend
+/// with the account's stored OAuth tokens)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateCalendarEventRequest {
+    pub account_email: String,
+    pub summary: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    /// Link back to the source email (Gmail URL)
+    pub email_link: Option<String>,
+    /// Target calendar name; defaults to "Agent"
+    pub calendar_name: Option<String>,
+}
+
+/// Result of creating an event on the agent calendar
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateCalendarEventResponse {
+    pub google_event_id: String,
+    pub html_link: Option<String>,
+    pub calendar_id: String,
 }
 
 /// Query parameters for listing emails

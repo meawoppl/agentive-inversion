@@ -2076,4 +2076,49 @@ mod serde_roundtrip_tests {
         let parsed = roundtrip(&value);
         assert_eq!(parsed.content, value.content);
     }
+
+    #[test]
+    fn about_me_roundtrips() {
+        let value = AboutMeResponse {
+            content: "Two Gmail accounts, overwhelmed by life admin.".to_string(),
+            updated_at: Utc::now(),
+        };
+        assert_eq!(roundtrip(&value), value);
+
+        let request = UpdateAboutMeRequest {
+            content: "Updated context".to_string(),
+        };
+        assert_eq!(roundtrip(&request).content, request.content);
+    }
+
+    #[test]
+    fn create_calendar_event_request_roundtrips() {
+        let value = CreateCalendarEventRequest {
+            account_email: "matt@example.com".to_string(),
+            summary: "Dentist".to_string(),
+            description: Some("Six month cleaning".to_string()),
+            location: Some("123 Main St".to_string()),
+            start: Utc::now(),
+            end: Utc::now(),
+            email_link: Some("https://mail.google.com/mail/u/0/#inbox/abc".to_string()),
+            calendar_name: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.account_email, value.account_email);
+        assert_eq!(parsed.summary, value.summary);
+        assert_eq!(parsed.email_link, value.email_link);
+        assert_eq!(parsed.calendar_name, None);
+    }
+
+    #[test]
+    fn create_calendar_event_response_roundtrips() {
+        let value = CreateCalendarEventResponse {
+            google_event_id: "evt-123".to_string(),
+            html_link: Some("https://calendar.google.com/event?eid=abc".to_string()),
+            calendar_id: "agent@group.calendar.google.com".to_string(),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.google_event_id, value.google_event_id);
+        assert_eq!(parsed.calendar_id, value.calendar_id);
+    }
 }

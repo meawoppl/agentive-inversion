@@ -78,8 +78,9 @@ comment in `crates/backend/Cargo.toml`.
 - Run `cargo clippy --workspace --all-targets` to check for issues
 - CI runs with `RUSTFLAGS=-Dwarnings` and `--locked`, so warnings and a stale
   `Cargo.lock` both fail the build
-- `cargo audit` runs in CI. Suppressions live in `.cargo/audit.toml` and are
-  currently limited to diesel 2.1 advisories blocked by issue #91
+- `cargo audit` runs in CI and currently passes with **no suppressions**. There
+  is no `.cargo/audit.toml`; keep it that way. Fix the advisory or bump the
+  dependency rather than adding an ignore list
 
 ### API Integration
 - Gmail and Calendar APIs use OAuth2 via `yup-oauth2`
@@ -96,7 +97,6 @@ comment in `crates/backend/Cargo.toml`.
   calling `env::var` at the point of use
 - Diesel config: `diesel.toml`
 - Trunk config: `crates/frontend/Trunk.toml`
-- cargo-audit suppressions: `.cargo/audit.toml`
 
 ### Source Code
 - Backend router: `crates/backend/src/main.rs` — `build_app(state, config)` is a
@@ -130,7 +130,7 @@ cd crates/frontend && trunk serve  # Frontend dev server with live reload
 cargo test --workspace           # Run all tests
 cargo test -p backend            # Run backend tests only
 ./scripts/check-migration-names.sh  # Validate migration directory names
-cargo audit                      # Check advisories (honours .cargo/audit.toml)
+cargo audit                      # Check advisories (must pass with no ignores)
 ```
 
 ### Database

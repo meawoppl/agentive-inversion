@@ -131,6 +131,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    claude_credentials (id) {
+        id -> Int4,
+        oauth_token -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     about_me (id) {
         id -> Int4,
         content -> Text,

@@ -2054,3 +2054,39 @@ main {
     font-style: italic;
     color: var(--text-secondary, #57606a);
 }
+
+/* Claude Code auth card */
+.claude-auth-card {
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border-color, #e1e4e8);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+    max-width: 640px;
+}
+
+.claude-auth-card h3 {
+    margin-top: 0;
+}
+
+.claude-auth-connected {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.claude-auth-code-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.claude-auth-code-row input {
+    flex: 1;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color, #e1e4e8);
+    border-radius: 6px;
+}
+
+.claude-auth-flow a {
+    word-break: break-all;
+}

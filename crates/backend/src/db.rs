@@ -495,6 +495,56 @@ pub mod emails {
     }
 }
 
+// Claude Code OAuth credential minted by the in-app login flow (single row)
+pub mod claude_credentials {
+    use super::*;
+
+    #[derive(Debug, Clone, Queryable)]
+    pub struct ClaudeCredential {
+        #[allow(dead_code)] // required for positional Queryable mapping
+        pub id: i32,
+        pub oauth_token: String,
+        pub updated_at: DateTime<Utc>,
+    }
+
+    pub async fn get(conn: &mut AsyncPgConnection) -> anyhow::Result<Option<ClaudeCredential>> {
+        use crate::schema::claude_credentials::dsl::*;
+
+        let cred = claude_credentials
+            .filter(id.eq(1))
+            .first::<ClaudeCredential>(conn)
+            .await
+            .optional()?;
+
+        Ok(cred)
+    }
+
+    pub async fn upsert(conn: &mut AsyncPgConnection, token: &str) -> anyhow::Result<()> {
+        use crate::schema::claude_credentials::dsl::*;
+
+        diesel::insert_into(claude_credentials)
+            .values((id.eq(1), oauth_token.eq(token), updated_at.eq(Utc::now())))
+            .on_conflict(id)
+            .do_update()
+            .set((oauth_token.eq(token), updated_at.eq(Utc::now())))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)] // disconnect flow, not yet exposed in the UI
+    pub async fn delete(conn: &mut AsyncPgConnection) -> anyhow::Result<()> {
+        use crate::schema::claude_credentials::dsl::*;
+
+        diesel::delete(claude_credentials.filter(id.eq(1)))
+            .execute(conn)
+            .await?;
+
+        Ok(())
+    }
+}
+
 // Personal-context document read by the triage agent (single-row table)
 pub mod about_me {
     use super::*;

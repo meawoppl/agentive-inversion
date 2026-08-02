@@ -11,6 +11,7 @@ use tower_http::{
 };
 
 mod auth;
+mod calendar_writer;
 mod db;
 pub mod error;
 mod handlers;
@@ -77,6 +78,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/todos/:id", delete(handlers::delete_todo))
         // Google account routes (for viewing connected accounts)
         .route("/google-accounts", get(handlers::list_google_accounts))
+        // About-me document (personal context for the triage agent)
+        .route("/about-me", get(handlers::get_about_me))
+        .route("/about-me", put(handlers::update_about_me))
         // Category routes
         .route("/categories", get(handlers::list_categories))
         .route("/categories", post(handlers::create_category))
@@ -117,6 +121,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/chat/history", get(handlers::get_chat_history))
         .route("/chat/history", delete(handlers::clear_chat_history))
         // Calendar event routes
+        .route(
+            "/calendar-events/create",
+            post(handlers::create_calendar_event),
+        )
         .route("/calendar-events", get(handlers::list_calendar_events))
         .route("/calendar-events/today", get(handlers::get_todays_events))
         .route(

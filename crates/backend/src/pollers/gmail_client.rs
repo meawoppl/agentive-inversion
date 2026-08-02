@@ -196,6 +196,65 @@ impl GmailClient {
         Ok(())
     }
 
+    /// Find a user label by name, creating it if it doesn't exist yet.
+    /// Returns the label ID (Gmail label IDs differ from display names).
+    #[allow(dead_code)] // invoked by the triage orchestrator
+    pub async fn ensure_label(&self, label_name: &str) -> Result<String> {
+        let (_, label_list) = self
+            .hub
+            .users()
+            .labels_list("me")
+            .doit()
+            .await
+            .context("Failed to list labels")?;
+
+        if let Some(labels) = label_list.labels {
+            for label in labels {
+                if label.name.as_deref() == Some(label_name) {
+                    return label.id.context("Label has no ID");
+                }
+            }
+        }
+
+        let new_label = google_gmail1::api::Label {
+            name: Some(label_name.to_string()),
+            label_list_visibility: Some("labelShow".to_string()),
+            message_list_visibility: Some("show".to_string()),
+            ..Default::default()
+        };
+
+        let (_, created) = self
+            .hub
+            .users()
+            .labels_create(new_label, "me")
+            .doit()
+            .await
+            .context("Failed to create label")?;
+
+        tracing::info!("Created Gmail label '{}'", label_name);
+        created.id.context("Created label has no ID")
+    }
+
+    /// Archive a message and tag it with the given label so agent actions
+    /// stay identifiable and recoverable in Gmail
+    #[allow(dead_code)] // invoked by the triage orchestrator
+    pub async fn archive_with_label(&self, message_id: &str, label_id: &str) -> Result<()> {
+        let modify_request = google_gmail1::api::ModifyMessageRequest {
+            remove_label_ids: Some(vec!["INBOX".to_string()]),
+            add_label_ids: Some(vec![label_id.to_string()]),
+        };
+
+        self.hub
+            .users()
+            .messages_modify(modify_request, "me", message_id)
+            .doit()
+            .await
+            .context("Failed to archive message with label")?;
+
+        tracing::info!("Archived message {} with agent label", message_id);
+        Ok(())
+    }
+
     fn parse_message(message: Message) -> EmailMessage {
         let id = message.id.clone().unwrap_or_default();
         let thread_id = message.thread_id.clone().unwrap_or_default();

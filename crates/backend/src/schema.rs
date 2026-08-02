@@ -125,6 +125,16 @@ diesel::table! {
         processed -> Bool,
         processed_at -> Nullable<Timestamptz>,
         archived_in_gmail -> Bool,
+        triage_status -> Varchar,
+        triaged_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    about_me (id) {
+        id -> Int4,
+        content -> Text,
+        updated_at -> Timestamptz,
     }
 }
 

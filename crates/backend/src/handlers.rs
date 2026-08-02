@@ -4,19 +4,21 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use shared_types::{
-    AgentDecisionResponse, AgentRuleResponse, ApproveDecisionRequest, BatchApproveDecisionsRequest,
-    BatchOperationFailure, BatchOperationResponse, BatchRejectDecisionsRequest, CalendarEventQuery,
-    CalendarEventResponse, Category, ChatHistoryQuery, ChatIntent, ChatMessageResponse,
-    ChatResponse, CreateAgentDecisionRequest, CreateAgentRuleRequest, CreateCategoryRequest,
-    CreateTodoRequest, DecisionStats, EmailListQuery, EmailResponse, GoogleAccountResponse,
-    RejectDecisionRequest, RuleListQuery, SendChatMessageRequest, SuggestedAction, Todo,
-    UpdateAgentRuleRequest, UpdateCategoryRequest, UpdateTodoRequest,
+    AboutMeResponse, AgentDecisionResponse, AgentRuleResponse, ApproveDecisionRequest,
+    BatchApproveDecisionsRequest, BatchOperationFailure, BatchOperationResponse,
+    BatchRejectDecisionsRequest, CalendarEventQuery, CalendarEventResponse, Category,
+    ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse, CreateAgentDecisionRequest,
+    CreateAgentRuleRequest, CreateCalendarEventRequest, CreateCalendarEventResponse,
+    CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailListQuery, EmailResponse,
+    GoogleAccountResponse, RejectDecisionRequest, RuleListQuery, SendChatMessageRequest,
+    SuggestedAction, Todo, UpdateAboutMeRequest, UpdateAgentRuleRequest, UpdateCategoryRequest,
+    UpdateTodoRequest,
 };
 use uuid::Uuid;
 
 // Authentication is handled by middleware layer in main.rs
 use crate::db::{
-    agent_rules, calendar_events, categories, chat_messages, decisions, emails, get_conn,
+    about_me, agent_rules, calendar_events, categories, chat_messages, decisions, emails, get_conn,
     google_accounts, todos,
 };
 use crate::error::{ApiError, ApiResult};
@@ -158,6 +160,7 @@ pub async fn list_emails(
             received_at: e.received_at,
             processed: e.processed,
             archived_in_gmail: e.archived_in_gmail,
+            triage_status: e.triage_status,
         })
         .collect();
 
@@ -185,6 +188,7 @@ pub async fn get_email(
         received_at: email.received_at,
         processed: email.processed,
         archived_in_gmail: email.archived_in_gmail,
+        triage_status: email.triage_status,
     }))
 }
 
@@ -199,6 +203,75 @@ pub async fn get_email_stats(State(state): State<AppState>) -> ApiResult<Json<Em
     let total = emails::count_all(&mut conn).await?;
     let unprocessed = emails::count_unprocessed(&mut conn).await?;
     Ok(Json(EmailStatsResponse { total, unprocessed }))
+}
+
+// About-me document handlers
+pub async fn get_about_me(State(state): State<AppState>) -> ApiResult<Json<AboutMeResponse>> {
+    let mut conn = get_conn(&state.pool).await?;
+    let doc = about_me::get(&mut conn).await?;
+    Ok(Json(AboutMeResponse {
+        content: doc.content,
+        updated_at: doc.updated_at,
+    }))
+}
+
+pub async fn update_about_me(
+    State(state): State<AppState>,
+    Json(req): Json<UpdateAboutMeRequest>,
+) -> ApiResult<Json<AboutMeResponse>> {
+    let mut conn = get_conn(&state.pool).await?;
+    let doc = about_me::update(&mut conn, &req.content).await?;
+    Ok(Json(AboutMeResponse {
+        content: doc.content,
+        updated_at: doc.updated_at,
+    }))
+}
+
+// Calendar event creation (executes a write to the agent calendar)
+pub async fn create_calendar_event(
+    State(state): State<AppState>,
+    Json(req): Json<CreateCalendarEventRequest>,
+) -> ApiResult<Json<CreateCalendarEventResponse>> {
+    use crate::calendar_writer::{CalendarWriter, NewCalendarEvent};
+
+    let mut conn = get_conn(&state.pool).await?;
+    let account = google_accounts::get_by_email(&mut conn, &req.account_email)
+        .await?
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("No connected account: {}", req.account_email))
+        })?;
+    drop(conn);
+
+    let writer = CalendarWriter::from_account(&account)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    let calendar_name = req.calendar_name.as_deref().unwrap_or("Agent");
+    let calendar_id = writer
+        .ensure_calendar(calendar_name)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    let created = writer
+        .create_event(
+            &calendar_id,
+            NewCalendarEvent {
+                summary: req.summary,
+                description: req.description,
+                location: req.location,
+                start: req.start,
+                end: req.end,
+                email_link: req.email_link,
+            },
+        )
+        .await
+        .map_err(ApiError::Internal)?;
+
+    Ok(Json(CreateCalendarEventResponse {
+        google_event_id: created.google_event_id,
+        html_link: created.html_link,
+        calendar_id: created.calendar_id,
+    }))
 }
 
 // ============================================================================

@@ -402,6 +402,30 @@ pub struct TriageStageCount {
     pub count: i64,
 }
 
+/// One archive determination with its email context, for bulk audit
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchiveReviewItem {
+    pub decision_id: Uuid,
+    pub email_id: Uuid,
+    pub status: String,
+    pub confidence: f32,
+    pub reasoning: String,
+    pub decided_at: DateTime<Utc>,
+    pub account_email: String,
+    pub subject: String,
+    pub from_address: String,
+    pub from_name: Option<String>,
+    pub received_at: DateTime<Utc>,
+    pub snippet: Option<String>,
+}
+
+/// Bulk view of archive determinations (dry-run audit surface)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchiveReviewResponse {
+    pub archive_mode: String,
+    pub items: Vec<ArchiveReviewItem>,
+}
+
 /// Typed pipeline/triage health status (stable shape; consumed by monitoring)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PipelineStatsResponse {

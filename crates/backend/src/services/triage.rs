@@ -21,6 +21,16 @@ pub const AGENT_ARCHIVE_LABEL: &str = "agent-archived";
 /// Default calendar for agent-created events
 pub const AGENT_CALENDAR_NAME: &str = "Agent";
 
+/// Archive execution policy. "propose" (the default) records Sonnet's
+/// determinations as gated proposals with full fidelity but never touches
+/// Gmail — the dry-run mode. "execute" auto-archives on determination.
+pub fn archive_mode() -> String {
+    match std::env::var("TRIAGE_ARCHIVE_MODE").as_deref() {
+        Ok("execute") => "execute".to_string(),
+        _ => "propose".to_string(),
+    }
+}
+
 /// Permalink to a message in the account's Gmail UI
 pub fn gmail_permalink(account_email: &str, gmail_id: &str) -> String {
     format!("https://mail.google.com/mail/u/{account_email}/#all/{gmail_id}")
@@ -101,6 +111,34 @@ impl TriageService {
             }
 
             TriageDecideAction::Archive => {
+                // Dry-run mode: identical determination, recorded as a gated
+                // proposal; approval executes. Same prompts, same model, same
+                // wire path — only this final side effect differs.
+                if archive_mode() != "execute" {
+                    let decision_id = db::decisions::create_with_status(
+                        &mut conn,
+                        "email",
+                        Some(email.id),
+                        Some(&email.gmail_id),
+                        DecisionType::Archive.as_str(),
+                        "{}",
+                        &req.reasoning,
+                        reasoning_details.as_deref(),
+                        0.9,
+                        DecisionStatus::Proposed.as_str(),
+                        None,
+                    )
+                    .await?;
+                    db::emails::set_triage_status(&mut conn, email.id, "archive_proposed").await?;
+                    db::emails::mark_processed(&mut conn, email.id).await?;
+                    return Ok(TriageDecideResponse {
+                        email_id: email.id,
+                        decision_id: Some(decision_id),
+                        triage_status: "archive_proposed".to_string(),
+                        executed: false,
+                    });
+                }
+
                 let account = db::google_accounts::get_by_id(&mut conn, email.account_id)
                     .await
                     .context("Account for email not found")?;
@@ -235,6 +273,35 @@ impl TriageService {
         }
     }
 
+    /// Execute an approved archive decision: label + archive in Gmail and
+    /// bring the email's pipeline state up to date
+    pub async fn execute_archive_decision(pool: &DbPool, decision_id: Uuid) -> Result<()> {
+        let mut conn = pool.get().await.context("Failed to get DB connection")?;
+
+        let decision = db::decisions::get_by_id(&mut conn, decision_id)
+            .await
+            .context("Decision not found")?;
+        let email_id = decision
+            .source_id
+            .context("Archive decision has no source email")?;
+        let email = db::emails::get_by_id(&mut conn, email_id).await?;
+        let account = db::google_accounts::get_by_id(&mut conn, email.account_id).await?;
+        drop(conn);
+
+        let client = GmailClient::from_account(&account).await?;
+        let label_id = client.ensure_label(AGENT_ARCHIVE_LABEL).await?;
+        client
+            .archive_with_label(&email.gmail_id, &label_id)
+            .await?;
+
+        let mut conn = pool.get().await.context("Failed to get DB connection")?;
+        db::emails::mark_archived_in_gmail(&mut conn, email.id).await?;
+        db::emails::set_triage_status(&mut conn, email.id, "archived").await?;
+        db::decisions::mark_executed(&mut conn, decision_id).await?;
+
+        Ok(())
+    }
+
     /// Execute an approved calendar-event decision (the gated half of the
     /// event flow). Returns the created event's ID.
     pub async fn execute_calendar_decision(pool: &DbPool, decision_id: Uuid) -> Result<String> {
@@ -286,6 +353,14 @@ impl TriageService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_mode_defaults_to_propose() {
+        // Absent or unrecognized values must fall back to the safe dry-run
+        // mode; only the literal "execute" enables Gmail mutation
+        std::env::remove_var("TRIAGE_ARCHIVE_MODE");
+        assert_eq!(archive_mode(), "propose");
+    }
 
     #[test]
     fn permalink_targets_the_account_mailbox() {

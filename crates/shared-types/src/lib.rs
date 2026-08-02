@@ -412,6 +412,25 @@ pub struct TriageStageCount {
     pub count: i64,
 }
 
+/// Response to starting the in-app Claude Code login flow
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeAuthStartResponse {
+    pub auth_url: String,
+}
+
+/// Code pasted back by the user to complete the Claude Code login
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeAuthCompleteRequest {
+    pub code: String,
+}
+
+/// Whether a Claude Code credential is stored for the pipeline
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeAuthStatusResponse {
+    pub connected: bool,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 /// One archive determination with its email context, for bulk audit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArchiveReviewItem {
@@ -2120,5 +2139,34 @@ mod serde_roundtrip_tests {
         let parsed = roundtrip(&value);
         assert_eq!(parsed.google_event_id, value.google_event_id);
         assert_eq!(parsed.calendar_id, value.calendar_id);
+    }
+
+    #[test]
+    fn claude_auth_start_response_roundtrips() {
+        let value = ClaudeAuthStartResponse {
+            auth_url: "https://claude.ai/oauth/authorize?code=abc".to_string(),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.auth_url, value.auth_url);
+    }
+
+    #[test]
+    fn claude_auth_complete_request_roundtrips() {
+        let value = ClaudeAuthCompleteRequest {
+            code: "pasted-code-123".to_string(),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.code, value.code);
+    }
+
+    #[test]
+    fn claude_auth_status_response_roundtrips() {
+        let value = ClaudeAuthStatusResponse {
+            connected: true,
+            updated_at: Some(Utc::now()),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.connected, value.connected);
+        assert!(parsed.updated_at.is_some());
     }
 }

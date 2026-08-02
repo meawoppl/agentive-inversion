@@ -45,3 +45,6 @@ inbox_senders.txt
 
 # Personal notes - never commit
 BIG_PICTURE.md
+
+# Sibling agent worktrees
+.worktrees/

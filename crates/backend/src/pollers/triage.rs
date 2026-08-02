@@ -157,10 +157,11 @@ pub async fn start_triage_task(pool: DbPool, auth_config: Arc<AuthConfig>, healt
     let config = TriageConfig::from_env();
 
     // Initial mode detection with explicit, greppable logging
-    match detect_mode().await {
-        Ok(()) => {
+    match detect_mode(&pool).await {
+        Ok(cred) => {
             tracing::info!(
-                "Email triage mode: agentic (screen={}, archive={}, action={})",
+                "Email triage mode: agentic (credential={}, screen={}, archive={}, action={})",
+                cred.source_name(),
                 config.screen_model,
                 config.archive_model,
                 config.action_model
@@ -183,9 +184,9 @@ pub async fn start_triage_task(pool: DbPool, auth_config: Arc<AuthConfig>, healt
     }
 
     loop {
-        // Re-detect each cycle so adding a key/binary recovers without restart
-        match detect_mode().await {
-            Ok(()) => {
+        // Re-detect each cycle so adding a credential recovers without restart
+        match detect_mode(&pool).await {
+            Ok(cred) => {
                 {
                     let mut h = health.write().await;
                     if h.mode != "agentic" {
@@ -194,7 +195,7 @@ pub async fn start_triage_task(pool: DbPool, auth_config: Arc<AuthConfig>, healt
                     h.mode = "agentic".to_string();
                 }
 
-                match run_cycle(&pool, &auth_config, &config).await {
+                match run_cycle(&pool, &auth_config, &config, &cred).await {
                     Ok(worked) => {
                         let mut h = health.write().await;
                         h.last_cycle_at = Some(Utc::now());
@@ -227,21 +228,48 @@ pub async fn start_triage_task(pool: DbPool, auth_config: Arc<AuthConfig>, healt
     }
 }
 
-/// Check the runtime prerequisites for agentic triage
-async fn detect_mode() -> Result<(), String> {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        return Err("ANTHROPIC_API_KEY not set".to_string());
-    }
+/// Credential the pipeline authenticates sessions with
+#[derive(Clone)]
+pub enum TriageCredential {
+    /// Claude Code OAuth token from the in-app login (subscription auth)
+    OAuthToken(String),
+    /// ANTHROPIC_API_KEY inherited from the environment
+    ApiKeyEnv,
+}
 
+impl TriageCredential {
+    fn source_name(&self) -> &'static str {
+        match self {
+            TriageCredential::OAuthToken(_) => "claude-code-login",
+            TriageCredential::ApiKeyEnv => "api-key-env",
+        }
+    }
+}
+
+/// Check the runtime prerequisites for agentic triage. The in-app Claude
+/// Code credential takes precedence over an environment API key.
+async fn detect_mode(pool: &DbPool) -> Result<TriageCredential, String> {
     match tokio::process::Command::new("claude")
         .arg("--version")
         .output()
         .await
     {
-        Ok(out) if out.status.success() => Ok(()),
-        Ok(_) => Err("claude binary exited non-zero".to_string()),
-        Err(e) => Err(format!("claude binary not found: {e}")),
+        Ok(out) if out.status.success() => {}
+        Ok(_) => return Err("claude binary exited non-zero".to_string()),
+        Err(e) => return Err(format!("claude binary not found: {e}")),
     }
+
+    if let Ok(mut conn) = pool.get().await {
+        if let Ok(Some(cred)) = db::claude_credentials::get(&mut conn).await {
+            return Ok(TriageCredential::OAuthToken(cred.oauth_token));
+        }
+    }
+
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        return Ok(TriageCredential::ApiKeyEnv);
+    }
+
+    Err("no credential: connect Claude Code in the UI or set ANTHROPIC_API_KEY".to_string())
 }
 
 /// Run one full triage cycle (all three stages). Returns emails touched.
@@ -249,6 +277,7 @@ async fn run_cycle(
     pool: &DbPool,
     auth_config: &AuthConfig,
     config: &TriageConfig,
+    credential: &TriageCredential,
 ) -> Result<usize> {
     let service_email = auth_config
         .allowed_emails
@@ -273,6 +302,7 @@ async fn run_cycle(
             &pending,
             &token,
             config.session_timeout,
+            credential,
         )
         .await
         .context("Screening stage failed")?;
@@ -287,6 +317,7 @@ async fn run_cycle(
             &candidates,
             &token,
             config.session_timeout,
+            credential,
         )
         .await
         .context("Archive determination stage failed")?;
@@ -301,6 +332,7 @@ async fn run_cycle(
             &actions,
             &token,
             config.session_timeout,
+            credential,
         )
         .await
         .context("Action stage failed")?;
@@ -351,6 +383,7 @@ async fn run_stage(
     emails: &[EmailForAgent],
     token: &str,
     timeout: Duration,
+    credential: &TriageCredential,
 ) -> Result<()> {
     let workdir = tempfile::tempdir().context("Failed to create session workdir")?;
 
@@ -364,11 +397,17 @@ async fn run_stage(
     std::fs::write(workdir.path().join(".agent-model"), model)
         .context("Failed to write agent model tag")?;
 
-    let builder = ClaudeCliBuilder::new()
+    let mut builder = ClaudeCliBuilder::new()
         .model(model)
         .working_directory(workdir.path())
         .allowed_tools(["Read", "Bash(agent-cli:*)"])
         .permission_mode(PermissionMode::DontAsk);
+
+    // Subscription auth from the in-app login takes precedence; the builder
+    // sets CLAUDE_CODE_OAUTH_TOKEN on the child process
+    if let TriageCredential::OAuthToken(oauth) = credential {
+        builder = builder.oauth_token(oauth.clone());
+    }
 
     let mut client = AsyncClient::from_builder(builder)
         .await

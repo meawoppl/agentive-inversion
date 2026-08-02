@@ -2,10 +2,10 @@ use gloo_net::http::Request;
 use shared_types::{
     AboutMeResponse, AgentDecisionResponse, ApproveDecisionRequest, AuthUserResponse,
     BatchApproveDecisionsRequest, BatchRejectDecisionsRequest, CalendarEventResponse, Category,
-    ChatMessageResponse, ChatResponse, CreateTodoRequest, DecisionStats, EmailResponse,
-    GoogleAccountResponse, LoginInitResponse, PipelineStatsResponse, ProposedCalendarEventAction,
-    ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest, SuggestedAction, Todo,
-    UpdateAboutMeRequest, UpdateTodoRequest,
+    ChatMessageResponse, ChatResponse, ClaudeAuthStatusResponse, CreateTodoRequest, DecisionStats,
+    EmailResponse, GoogleAccountResponse, LoginInitResponse, PipelineStatsResponse,
+    ProposedCalendarEventAction, ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest,
+    SuggestedAction, Todo, UpdateAboutMeRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 use web_sys::{Element, HtmlInputElement};
@@ -2378,6 +2378,165 @@ fn chat_widget() -> Html {
     }
 }
 
+/// Claude Code login card: start flow, show URL, paste code back
+#[function_component(ClaudeAuthCard)]
+fn claude_auth_card() -> Html {
+    let status = use_state(|| None::<ClaudeAuthStatusResponse>);
+    let auth_url = use_state(|| None::<String>);
+    let code = use_state(String::new);
+    let busy = use_state(|| false);
+    let error = use_state(|| None::<String>);
+
+    let refresh_status = {
+        let status = status.clone();
+        Callback::from(move |_: ()| {
+            let status = status.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(resp) = Request::get("/api/claude-auth/status").send().await {
+                    if resp.ok() {
+                        if let Ok(data) = resp.json::<ClaudeAuthStatusResponse>().await {
+                            status.set(Some(data));
+                        }
+                    }
+                }
+            });
+        })
+    };
+
+    {
+        let refresh = refresh_status.clone();
+        use_effect_with((), move |_| {
+            refresh.emit(());
+            || ()
+        });
+    }
+
+    let on_start = {
+        let auth_url = auth_url.clone();
+        let busy = busy.clone();
+        let error = error.clone();
+        Callback::from(move |_| {
+            let auth_url = auth_url.clone();
+            let busy = busy.clone();
+            let error = error.clone();
+            busy.set(true);
+            error.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                match Request::post("/api/claude-auth/start").send().await {
+                    Ok(resp) if resp.ok() => {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            if let Some(url) = data.get("auth_url").and_then(|u| u.as_str()) {
+                                auth_url.set(Some(url.to_string()));
+                            }
+                        }
+                    }
+                    Ok(resp) => error.set(Some(format!("Start failed: {}", resp.status()))),
+                    Err(e) => error.set(Some(format!("Start failed: {e}"))),
+                }
+                busy.set(false);
+            });
+        })
+    };
+
+    let on_code_input = {
+        let code = code.clone();
+        Callback::from(move |e: InputEvent| {
+            let target: HtmlInputElement = e.target_unchecked_into();
+            code.set(target.value());
+        })
+    };
+
+    let on_complete = {
+        let code = code.clone();
+        let auth_url = auth_url.clone();
+        let busy = busy.clone();
+        let error = error.clone();
+        let refresh = refresh_status.clone();
+        Callback::from(move |_| {
+            let body = serde_json::json!({ "code": (*code).clone() });
+            let code = code.clone();
+            let auth_url = auth_url.clone();
+            let busy = busy.clone();
+            let error = error.clone();
+            let refresh = refresh.clone();
+            busy.set(true);
+            error.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = Request::post("/api/claude-auth/complete")
+                    .header("Content-Type", "application/json")
+                    .body(body.to_string())
+                    .expect("body")
+                    .send()
+                    .await;
+                match result {
+                    Ok(resp) if resp.ok() => {
+                        auth_url.set(None);
+                        code.set(String::new());
+                        refresh.emit(());
+                    }
+                    Ok(resp) => {
+                        let text = resp.text().await.unwrap_or_default();
+                        error.set(Some(format!("Login failed ({}): {}", resp.status(), text)));
+                    }
+                    Err(e) => error.set(Some(format!("Login failed: {e}"))),
+                }
+                busy.set(false);
+            });
+        })
+    };
+
+    html! {
+        <div class="claude-auth-card">
+            <h3>{"Claude Code"}</h3>
+            {if let Some(err) = (*error).clone() {
+                html! { <div class="error-banner">{err}</div> }
+            } else {
+                html! {}
+            }}
+            {match ((*status).clone(), (*auth_url).clone()) {
+                (_, Some(url)) => html! {
+                    <div class="claude-auth-flow">
+                        <p>{"1. Open this link and sign in to Claude:"}</p>
+                        <p><a href={url.clone()} target="_blank" rel="noopener">{url}</a></p>
+                        <p>{"2. Paste the code you receive:"}</p>
+                        <div class="claude-auth-code-row">
+                            <input
+                                type="text"
+                                placeholder="Paste code here"
+                                value={(*code).clone()}
+                                oninput={on_code_input}
+                            />
+                            <button class="btn-primary" disabled={*busy || code.is_empty()} onclick={on_complete}>
+                                {if *busy { "Completing..." } else { "Complete login" }}
+                            </button>
+                        </div>
+                    </div>
+                },
+                (Some(st), None) if st.connected => html! {
+                    <div class="claude-auth-connected">
+                        <span class="status-dot status-ok"></span>
+                        <span>
+                            {"Connected"}
+                            {st.updated_at.map(|t| format!(" (since {})", t.format("%Y-%m-%d %H:%M UTC"))).unwrap_or_default()}
+                        </span>
+                        <button class="btn-secondary" disabled={*busy} onclick={on_start.clone()}>
+                            {"Re-login"}
+                        </button>
+                    </div>
+                },
+                _ => html! {
+                    <div class="claude-auth-disconnected">
+                        <p>{"Not connected. The triage pipeline needs a Claude credential."}</p>
+                        <button class="btn-primary" disabled={*busy} onclick={on_start}>
+                            {if *busy { "Starting..." } else { "Login to Claude Code" }}
+                        </button>
+                    </div>
+                },
+            }}
+        </div>
+    }
+}
+
 /// Pipeline infrastructure screen: triage mode, health, and stage counts
 #[function_component(PipelineView)]
 fn pipeline_view() -> Html {
@@ -2418,6 +2577,7 @@ fn pipeline_view() -> Html {
     html! {
         <div class="pipeline-view">
             <h2>{"Triage Pipeline"}</h2>
+            <ClaudeAuthCard />
             {if let Some(err) = (*error).clone() {
                 html! { <div class="error-banner">{err}</div> }
             } else {

@@ -8,6 +8,7 @@ use shared_types::{
     ArchiveReviewItem, ArchiveReviewResponse, BatchApproveDecisionsRequest, BatchOperationFailure,
     BatchOperationResponse, BatchRejectDecisionsRequest, CalendarEventQuery, CalendarEventResponse,
     Category, ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse,
+    ClaudeAuthCompleteRequest, ClaudeAuthStartResponse, ClaudeAuthStatusResponse,
     CreateAgentDecisionRequest, CreateAgentRuleRequest, CreateCalendarEventRequest,
     CreateCalendarEventResponse, CreateCategoryRequest, CreateTodoRequest, DecisionStats,
     EmailListQuery, EmailResponse, GoogleAccountResponse, PipelineStatsResponse,
@@ -304,6 +305,100 @@ pub async fn get_pipeline_stats(
             .into_iter()
             .map(|(status, count)| TriageStageCount { status, count })
             .collect(),
+    }))
+}
+
+// ============================================================================
+// Claude Code login flow (mints the pipeline's subscription credential)
+// ============================================================================
+
+pub async fn claude_auth_start(
+    State(state): State<AppState>,
+) -> ApiResult<Json<ClaudeAuthStartResponse>> {
+    use claude_codes::auth::{LoginFlow, LoginMode};
+
+    // PTY interaction is blocking; drive it off the async runtime
+    let (flow, auth_url) = tokio::task::spawn_blocking(|| {
+        let mut flow = LoginFlow::start(LoginMode::SetupToken)
+            .map_err(|e| anyhow::anyhow!("Failed to start claude login: {e}"))?;
+        let url = flow
+            .auth_url(std::time::Duration::from_secs(30))
+            .map_err(|e| anyhow::anyhow!("Login flow produced no auth URL: {e}"))?;
+        Ok::<_, anyhow::Error>((flow, url))
+    })
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("Login task panicked: {e}")))?
+    .map_err(ApiError::Internal)?;
+
+    // Replacing any previous in-flight flow cancels it (Drop kills the child)
+    *state
+        .claude_login
+        .lock()
+        .expect("claude_login mutex poisoned") = Some(flow);
+
+    Ok(Json(ClaudeAuthStartResponse { auth_url }))
+}
+
+pub async fn claude_auth_complete(
+    State(state): State<AppState>,
+    Json(req): Json<ClaudeAuthCompleteRequest>,
+) -> ApiResult<Json<ClaudeAuthStatusResponse>> {
+    let flow = state
+        .claude_login
+        .lock()
+        .expect("claude_login mutex poisoned")
+        .take()
+        .ok_or_else(|| {
+            ApiError::BadRequest("No Claude login in progress - start one first".to_string())
+        })?;
+
+    let code = req.code.trim().to_string();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut flow = flow;
+        flow.submit_code(&code)
+            .map_err(|e| anyhow::anyhow!("Submitting code failed: {e}"))?;
+        flow.finish(std::time::Duration::from_secs(60))
+            .map_err(|e| anyhow::anyhow!("Login did not complete: {e}"))
+    })
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("Login task panicked: {e}")))?
+    .map_err(ApiError::Internal)?;
+
+    let token = outcome.token.ok_or_else(|| {
+        let tail: String = outcome
+            .transcript
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        ApiError::Internal(anyhow::anyhow!(
+            "Login finished without minting a token. CLI output ended with: {tail}"
+        ))
+    })?;
+
+    let mut conn = get_conn(&state.pool).await?;
+    crate::db::claude_credentials::upsert(&mut conn, &token).await?;
+    let cred = crate::db::claude_credentials::get(&mut conn).await?;
+
+    tracing::info!("Claude Code credential stored via in-app login");
+
+    Ok(Json(ClaudeAuthStatusResponse {
+        connected: true,
+        updated_at: cred.map(|c| c.updated_at),
+    }))
+}
+
+pub async fn claude_auth_status(
+    State(state): State<AppState>,
+) -> ApiResult<Json<ClaudeAuthStatusResponse>> {
+    let mut conn = get_conn(&state.pool).await?;
+    let cred = crate::db::claude_credentials::get(&mut conn).await?;
+    Ok(Json(ClaudeAuthStatusResponse {
+        connected: cred.is_some(),
+        updated_at: cred.map(|c| c.updated_at),
     }))
 }
 

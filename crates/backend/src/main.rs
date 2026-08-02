@@ -44,6 +44,9 @@ pub struct AppState {
     pub pool: db::DbPool,
     pub auth_config: Arc<AuthConfig>,
     pub triage_health: pollers::TriageHealth,
+    /// In-flight interactive Claude Code login, if any (single-user app:
+    /// one flow at a time; replacing a flow cancels the previous one)
+    pub claude_login: Arc<std::sync::Mutex<Option<claude_codes::auth::LoginFlow>>>,
 }
 
 /// Build the full application router from shared state.
@@ -102,6 +105,13 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
         // Triage pipeline routes (agent-cli + pipeline screen)
         .route("/triage/decisions", post(handlers::post_triage_decision))
         .route("/pipeline/stats", get(handlers::get_pipeline_stats))
+        // Claude Code login flow (subscription auth for the triage pipeline)
+        .route("/claude-auth/start", post(handlers::claude_auth_start))
+        .route(
+            "/claude-auth/complete",
+            post(handlers::claude_auth_complete),
+        )
+        .route("/claude-auth/status", get(handlers::claude_auth_status))
         .route(
             "/pipeline/archive-review",
             get(handlers::get_archive_review),
@@ -236,6 +246,7 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         auth_config: auth_config.clone(),
         triage_health: triage_health.clone(),
+        claude_login: Arc::new(std::sync::Mutex::new(None)),
     };
 
     if !args.dev_mode {
@@ -349,6 +360,7 @@ mod tests {
                 google_client_secret: "test-client-secret".to_string(),
                 auth_redirect_uri: "http://localhost:3000/api/auth/callback".to_string(),
             }),
+            claude_login: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 

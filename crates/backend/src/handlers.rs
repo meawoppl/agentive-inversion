@@ -10,8 +10,9 @@ use shared_types::{
     ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse, CreateAgentDecisionRequest,
     CreateAgentRuleRequest, CreateCalendarEventRequest, CreateCalendarEventResponse,
     CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailListQuery, EmailResponse,
-    GoogleAccountResponse, RejectDecisionRequest, RuleListQuery, SendChatMessageRequest,
-    SuggestedAction, Todo, UpdateAboutMeRequest, UpdateAgentRuleRequest, UpdateCategoryRequest,
+    GoogleAccountResponse, PipelineStatsResponse, RejectDecisionRequest, RuleListQuery,
+    SendChatMessageRequest, SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse,
+    TriageStageCount, UpdateAboutMeRequest, UpdateAgentRuleRequest, UpdateCategoryRequest,
     UpdateTodoRequest,
 };
 use uuid::Uuid;
@@ -274,6 +275,38 @@ pub async fn create_calendar_event(
     }))
 }
 
+// Triage decision endpoint (called by agent-cli from agent sessions)
+pub async fn post_triage_decision(
+    State(state): State<AppState>,
+    Json(req): Json<TriageDecideRequest>,
+) -> ApiResult<Json<TriageDecideResponse>> {
+    let resp = crate::services::TriageService::apply(&state.pool, req)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(resp))
+}
+
+// Pipeline stats for the pipeline screen and monitoring (stable typed shape)
+pub async fn get_pipeline_stats(
+    State(state): State<AppState>,
+) -> ApiResult<Json<PipelineStatsResponse>> {
+    let mut conn = get_conn(&state.pool).await?;
+    let counts = emails::triage_status_counts(&mut conn).await?;
+
+    let health = state.triage_health.read().await.clone();
+
+    Ok(Json(PipelineStatsResponse {
+        mode: health.mode,
+        last_cycle_at: health.last_cycle_at,
+        last_cycle_error: health.last_cycle_error,
+        consecutive_failures: health.consecutive_failures,
+        stage_counts: counts
+            .into_iter()
+            .map(|(status, count)| TriageStageCount { status, count })
+            .collect(),
+    }))
+}
+
 // ============================================================================
 // Agent Decision handlers
 // ============================================================================
@@ -347,6 +380,19 @@ pub async fn approve_decision(
 ) -> ApiResult<Json<AgentDecisionResponse>> {
     let mut conn = state.pool.get().await?;
     let result = DecisionService::approve(&mut conn, id, payload.modifications).await?;
+    let is_calendar = result.decision.decision_type == "create_calendar_event";
+    drop(conn);
+
+    // Approving a gated calendar proposal executes the write
+    if is_calendar {
+        crate::services::TriageService::execute_calendar_decision(&state.pool, id)
+            .await
+            .map_err(ApiError::Internal)?;
+        let mut conn = state.pool.get().await?;
+        let refreshed = decisions::get_by_id(&mut conn, id).await?;
+        return Ok(Json(refreshed.into()));
+    }
+
     Ok(Json(result.decision.into()))
 }
 

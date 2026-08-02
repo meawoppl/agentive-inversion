@@ -330,6 +330,89 @@ pub struct CreateCalendarEventResponse {
     pub calendar_id: String,
 }
 
+/// Calendar event proposed by the triage agent (stored as a gated decision's
+/// proposed_action; executed on approval)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProposedCalendarEventAction {
+    pub account_email: String,
+    pub summary: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub email_link: Option<String>,
+    pub calendar_name: Option<String>,
+}
+
+/// Disposition submitted by a triage agent session for one email
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TriageDecideAction {
+    /// Screening pass flagged this as probably-archivable (final call is a
+    /// later determination pass)
+    ArchiveCandidate,
+    /// Archive now: label agent-archived and remove from inbox (auto-executed)
+    Archive,
+    /// Deliberately leave in the inbox
+    Keep,
+    /// Propose a calendar event (gated: lands in the decision inbox)
+    Event {
+        summary: String,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        description: Option<String>,
+        location: Option<String>,
+    },
+    /// Propose a todo (gated: lands in the decision inbox)
+    Todo {
+        title: String,
+        description: Option<String>,
+        due_date: Option<DateTime<Utc>>,
+    },
+    /// Nothing actionable here
+    Ignore,
+    /// Send to the action queue for the deeper (Opus) pass
+    QueueAction,
+}
+
+/// Request body for POST /api/triage/decisions (sent by agent-cli)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriageDecideRequest {
+    pub email_id: Uuid,
+    pub action: TriageDecideAction,
+    pub reasoning: String,
+    /// Model that made this call, for the audit trail
+    pub model: Option<String>,
+}
+
+/// Response for a triage disposition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriageDecideResponse {
+    pub email_id: Uuid,
+    pub decision_id: Option<Uuid>,
+    pub triage_status: String,
+    /// Whether a side effect (e.g. Gmail archive) already ran
+    pub executed: bool,
+}
+
+/// One triage_status bucket count for the pipeline display
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TriageStageCount {
+    pub status: String,
+    pub count: i64,
+}
+
+/// Typed pipeline/triage health status (stable shape; consumed by monitoring)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PipelineStatsResponse {
+    /// "agentic" or "disabled" (no API key / claude binary)
+    pub mode: String,
+    pub last_cycle_at: Option<DateTime<Utc>>,
+    pub last_cycle_error: Option<String>,
+    pub consecutive_failures: i32,
+    pub stage_counts: Vec<TriageStageCount>,
+}
+
 /// Query parameters for listing emails
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EmailListQuery {
@@ -383,6 +466,7 @@ pub enum DecisionType {
     Defer,
     Categorize,
     SetDueDate,
+    CreateCalendarEvent,
 }
 
 impl DecisionType {
@@ -394,6 +478,7 @@ impl DecisionType {
             DecisionType::Defer => "defer",
             DecisionType::Categorize => "categorize",
             DecisionType::SetDueDate => "set_due_date",
+            DecisionType::CreateCalendarEvent => "create_calendar_event",
         }
     }
 
@@ -405,6 +490,7 @@ impl DecisionType {
             "defer" => Some(DecisionType::Defer),
             "categorize" => Some(DecisionType::Categorize),
             "set_due_date" => Some(DecisionType::SetDueDate),
+            "create_calendar_event" => Some(DecisionType::CreateCalendarEvent),
             _ => None,
         }
     }
@@ -1509,4 +1595,44 @@ pub struct AuthUserResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginInitResponse {
     pub auth_url: String,
+}
+
+#[cfg(test)]
+mod triage_type_tests {
+    use super::*;
+
+    #[test]
+    fn triage_action_wire_format_is_stable() {
+        let json = serde_json::to_value(&TriageDecideAction::ArchiveCandidate).unwrap();
+        assert_eq!(json["type"], "archive_candidate");
+
+        let event = TriageDecideAction::Event {
+            summary: "Dinner".to_string(),
+            start: "2026-08-09T18:00:00Z".parse().unwrap(),
+            end: "2026-08-09T19:00:00Z".parse().unwrap(),
+            description: None,
+            location: Some("SF".to_string()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "event");
+        assert_eq!(json["summary"], "Dinner");
+
+        let parsed: TriageDecideAction = serde_json::from_str(
+            r#"{"type":"todo","title":"Reply","description":null,"due_date":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(parsed, TriageDecideAction::Todo { .. }));
+    }
+
+    #[test]
+    fn calendar_decision_type_round_trips() {
+        assert_eq!(
+            DecisionType::CreateCalendarEvent.as_str(),
+            "create_calendar_event"
+        );
+        assert_eq!(
+            DecisionType::parse("create_calendar_event"),
+            Some(DecisionType::CreateCalendarEvent)
+        );
+    }
 }

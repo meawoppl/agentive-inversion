@@ -28,6 +28,7 @@ use auth::types::AuthConfig;
 pub struct AppState {
     pub pool: db::DbPool,
     pub auth_config: Arc<AuthConfig>,
+    pub triage_health: pollers::TriageHealth,
 }
 
 #[tokio::main]
@@ -52,15 +53,28 @@ async fn main() -> anyhow::Result<()> {
         auth_config.allowed_emails.len()
     );
 
+    let triage_health: pollers::TriageHealth = Arc::new(tokio::sync::RwLock::new(
+        pollers::TriageHealthState::default(),
+    ));
+
     let app_state = AppState {
         pool: pool.clone(),
-        auth_config,
+        auth_config: auth_config.clone(),
+        triage_health: triage_health.clone(),
     };
 
-    // Start email polling background task
+    // Start email polling background task (ingestion is never gated on triage)
     let email_poll_pool = pool.clone();
+    let email_poll_health = triage_health.clone();
     tokio::spawn(async move {
-        pollers::start_email_polling_task(email_poll_pool).await;
+        pollers::start_email_polling_task(email_poll_pool, email_poll_health).await;
+    });
+
+    // Start the agentic triage pipeline task
+    let triage_pool = pool.clone();
+    let triage_auth = auth_config.clone();
+    tokio::spawn(async move {
+        pollers::start_triage_task(triage_pool, triage_auth, triage_health).await;
     });
 
     // Start calendar polling background task (stub - not yet implemented)
@@ -116,6 +130,9 @@ async fn main() -> anyhow::Result<()> {
             "/rules/:id/toggle",
             post(handlers::toggle_agent_rule_active),
         )
+        // Triage pipeline routes (agent-cli + pipeline screen)
+        .route("/triage/decisions", post(handlers::post_triage_decision))
+        .route("/pipeline/stats", get(handlers::get_pipeline_stats))
         // Chat routes
         .route("/chat", post(handlers::send_chat_message))
         .route("/chat/history", get(handlers::get_chat_history))

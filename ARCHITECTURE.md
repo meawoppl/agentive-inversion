@@ -94,19 +94,25 @@ Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
 ## Deployment Architecture
 
 ### Development
-- Frontend: `trunk serve` (port 8080, proxies `/api` to the backend)
-- Backend + pollers: `cargo run --bin backend` (port 3000)
+- Frontend: `trunk serve` (port 8080, proxies `/api` to the backend) for live
+  reload, or `trunk build` once and let the backend serve it on port 3000
+- Backend + pollers: `cargo run --bin backend` (port 3000). Pass `--dev-mode`
+  to skip starting the Gmail and Calendar pollers
 - Database: any PostgreSQL (local or docker-compose)
 
 ### Production
 - Merge to main → `container.yml` pushes `ghcr.io/meawoppl/agentive-inversion:main`
 - Watchtower on the production host polls that tag and redeploys automatically
   (~5 minutes from merge to live); there is no manual deploy step
-- Single backend container serves the API, pollers, and built frontend behind
-  a TLS-terminating reverse proxy
+- Single backend container serves the API, pollers, and the frontend behind a
+  TLS-terminating reverse proxy. The frontend is compiled into the binary by
+  `memory-serve`, so the image carries only the binary — no `frontend/dist`,
+  no `migrations/`, no `psql`
 - Database: self-hosted PostgreSQL 17 container with nightly dumps to S3
-- The container entrypoint runs pending migrations before starting the server,
-  so migrations must be idempotent
+- Migrations are embedded in the binary by `diesel_migrations` and applied by
+  the server on startup, before it binds a port. A failed migration exits
+  non-zero rather than serving a half-migrated schema, so migrations must
+  still be idempotent
 
 ## Security Considerations
 

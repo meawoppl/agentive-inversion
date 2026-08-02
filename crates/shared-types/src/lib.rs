@@ -61,6 +61,16 @@ fn get_cached_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
     Ok(re)
 }
 
+// ============================================================================
+// Health
+// ============================================================================
+
+/// Health check response from `/health` and `/api/health`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub status: String,
+}
+
 /// Todo struct matching database column order exactly
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "diesel", derive(diesel::Queryable))]
@@ -1658,5 +1668,412 @@ mod triage_type_tests {
             DecisionType::parse("create_calendar_event"),
             Some(DecisionType::CreateCalendarEvent)
         );
+    }
+}
+
+// ============================================================================
+// Serialization Roundtrip Tests
+// ============================================================================
+//
+// Every type that crosses the backend/frontend boundary gets a roundtrip test,
+// and the enums additionally pin their wire form. These enums carry *two*
+// string representations that are easy to confuse:
+//
+//   * serde/JSON uses the Rust variant name verbatim  -> "CreateTodo"
+//   * `as_str()`/`parse()` are the database form      -> "create_todo"
+//
+// Neither is derived from the other, so both are asserted explicitly.
+
+#[cfg(test)]
+mod serde_roundtrip_tests {
+    use super::*;
+
+    fn roundtrip<T>(value: &T) -> T
+    where
+        T: Serialize + serde::de::DeserializeOwned,
+    {
+        let json = serde_json::to_string(value).expect("serialize");
+        serde_json::from_str(&json).expect("deserialize")
+    }
+
+    fn json_of<T: Serialize>(value: &T) -> String {
+        serde_json::to_string(value).expect("serialize")
+    }
+
+    // ---- Enums: JSON wire form -------------------------------------------
+
+    #[test]
+    fn enum_json_is_the_pascal_case_variant_name() {
+        assert_eq!(json_of(&DecisionSourceType::Email), r#""Email""#);
+        assert_eq!(json_of(&DecisionType::CreateTodo), r#""CreateTodo""#);
+        assert_eq!(json_of(&DecisionStatus::AutoApproved), r#""AutoApproved""#);
+        assert_eq!(json_of(&RuleSourceType::Any), r#""Any""#);
+        assert_eq!(json_of(&RuleType::ExactMatch), r#""ExactMatch""#);
+        assert_eq!(json_of(&RuleAction::SetDueDate), r#""SetDueDate""#);
+        assert_eq!(json_of(&ChatRole::Assistant), r#""Assistant""#);
+        assert_eq!(json_of(&ChatIntent::QueryTodos), r#""QueryTodos""#);
+        assert_eq!(json_of(&EmailProvider::Gmail), r#""Gmail""#);
+    }
+
+    #[test]
+    fn enum_db_form_differs_from_the_json_form() {
+        assert_eq!(DecisionType::CreateTodo.as_str(), "create_todo");
+        assert_eq!(DecisionStatus::AutoApproved.as_str(), "auto_approved");
+        assert_eq!(RuleType::ExactMatch.as_str(), "exact_match");
+        assert_eq!(RuleAction::SetDueDate.as_str(), "set_due_date");
+        assert_eq!(ChatIntent::QueryTodos.as_str(), "query_todos");
+    }
+
+    // ---- Enums: serde and as_str/parse roundtrips -------------------------
+
+    #[test]
+    fn decision_source_type_roundtrips() {
+        for value in [
+            DecisionSourceType::Email,
+            DecisionSourceType::Calendar,
+            DecisionSourceType::Manual,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(
+                DecisionSourceType::parse(value.as_str()),
+                Some(value.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn decision_type_roundtrips() {
+        for value in [
+            DecisionType::CreateTodo,
+            DecisionType::Ignore,
+            DecisionType::Archive,
+            DecisionType::Defer,
+            DecisionType::Categorize,
+            DecisionType::SetDueDate,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(DecisionType::parse(value.as_str()), Some(value.clone()));
+        }
+    }
+
+    #[test]
+    fn decision_status_roundtrips() {
+        for value in [
+            DecisionStatus::Proposed,
+            DecisionStatus::Approved,
+            DecisionStatus::Rejected,
+            DecisionStatus::AutoApproved,
+            DecisionStatus::Executed,
+            DecisionStatus::Failed,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(DecisionStatus::parse(value.as_str()), Some(value));
+        }
+    }
+
+    #[test]
+    fn rule_source_type_roundtrips() {
+        for value in [
+            RuleSourceType::Email,
+            RuleSourceType::Calendar,
+            RuleSourceType::Any,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(RuleSourceType::parse(value.as_str()), Some(value.clone()));
+        }
+    }
+
+    #[test]
+    fn rule_type_roundtrips() {
+        for value in [
+            RuleType::ExactMatch,
+            RuleType::Contains,
+            RuleType::Regex,
+            RuleType::Sender,
+            RuleType::Label,
+            RuleType::TimeBased,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(RuleType::parse(value.as_str()), Some(value.clone()));
+        }
+    }
+
+    #[test]
+    fn rule_action_roundtrips() {
+        for value in [
+            RuleAction::CreateTodo,
+            RuleAction::Ignore,
+            RuleAction::Archive,
+            RuleAction::Categorize,
+            RuleAction::SetDueDate,
+            RuleAction::Defer,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(RuleAction::parse(value.as_str()), Some(value.clone()));
+        }
+    }
+
+    #[test]
+    fn chat_role_roundtrips() {
+        for value in [ChatRole::User, ChatRole::Assistant] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(ChatRole::parse(value.as_str()), Some(value.clone()));
+        }
+    }
+
+    #[test]
+    fn chat_intent_roundtrips() {
+        for value in [
+            ChatIntent::CreateTodo,
+            ChatIntent::QueryTodos,
+            ChatIntent::MarkComplete,
+            ChatIntent::ModifyTodo,
+            ChatIntent::QueryEmails,
+            ChatIntent::QueryDecisions,
+            ChatIntent::ApproveDecision,
+            ChatIntent::RejectDecision,
+            ChatIntent::Help,
+            ChatIntent::General,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+            assert_eq!(ChatIntent::parse(value.as_str()), Some(value.clone()));
+        }
+    }
+
+    #[test]
+    fn todo_source_roundtrips() {
+        let account_id = Uuid::new_v4();
+        for value in [
+            TodoSource::Manual,
+            TodoSource::Email { account_id },
+            TodoSource::Calendar {
+                calendar_id: "primary".to_string(),
+            },
+        ] {
+            assert_eq!(roundtrip(&value), value);
+        }
+    }
+
+    // ---- Structs ----------------------------------------------------------
+
+    #[test]
+    fn health_response_roundtrips() {
+        let value = HealthResponse {
+            status: "ok".to_string(),
+        };
+        assert_eq!(roundtrip(&value), value);
+        assert_eq!(json_of(&value), r#"{"status":"ok"}"#);
+    }
+
+    #[test]
+    fn todo_roundtrips() {
+        let value = Todo {
+            id: Uuid::new_v4(),
+            title: "Pay the water bill".to_string(),
+            description: Some("Due at the end of the month".to_string()),
+            completed: false,
+            source: "email".to_string(),
+            source_id: Some("gmail-123".to_string()),
+            due_date: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            link: Some("https://example.com".to_string()),
+            category_id: Some(Uuid::new_v4()),
+            decision_id: Some(Uuid::new_v4()),
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn create_todo_request_roundtrips() {
+        let value = CreateTodoRequest {
+            title: "Book the dentist".to_string(),
+            description: None,
+            due_date: Some(Utc::now()),
+            link: None,
+            category_id: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.title, value.title);
+        assert_eq!(parsed.due_date, value.due_date);
+    }
+
+    #[test]
+    fn update_todo_request_roundtrips() {
+        let value = UpdateTodoRequest {
+            title: Some("Renamed".to_string()),
+            description: None,
+            completed: Some(true),
+            due_date: None,
+            link: None,
+            category_id: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.title, value.title);
+        assert_eq!(parsed.completed, value.completed);
+    }
+
+    #[test]
+    fn category_roundtrips() {
+        let value = Category {
+            id: Uuid::new_v4(),
+            name: "Finance".to_string(),
+            color: Some("#7aa2f7".to_string()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn create_category_request_roundtrips() {
+        let value = CreateCategoryRequest {
+            name: "Travel".to_string(),
+            color: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.name, value.name);
+        assert_eq!(parsed.color, value.color);
+    }
+
+    #[test]
+    fn proposed_todo_action_roundtrips() {
+        let value = ProposedTodoAction {
+            todo_title: "Renew passport".to_string(),
+            todo_description: Some("Expires in March".to_string()),
+            due_date: Some(Utc::now()),
+            category_id: Some(Uuid::new_v4()),
+            priority: Some("high".to_string()),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.todo_title, value.todo_title);
+        assert_eq!(parsed.priority, value.priority);
+    }
+
+    #[test]
+    fn reasoning_details_roundtrips() {
+        let value = ReasoningDetails {
+            matched_keywords: Some(vec!["invoice".to_string(), "due".to_string()]),
+            detected_deadline: Some("2026-09-01".to_string()),
+            sender_frequency: Some(4),
+            thread_length: Some(2),
+            heuristic_score: Some(0.75),
+            llm_analysis: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.matched_keywords, value.matched_keywords);
+        assert_eq!(parsed.heuristic_score, value.heuristic_score);
+    }
+
+    #[test]
+    fn rule_conditions_roundtrip() {
+        let value = RuleConditions {
+            operator: "AND".to_string(),
+            clauses: vec![RuleConditionClause {
+                field: "from_address".to_string(),
+                matcher: "contains".to_string(),
+                value: "@bank.example".to_string(),
+                case_sensitive: false,
+            }],
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.operator, value.operator);
+        assert_eq!(parsed.clauses.len(), 1);
+        assert_eq!(parsed.clauses[0].field, "from_address");
+    }
+
+    /// `case_sensitive` is `#[serde(default)]`, so stored conditions written
+    /// before the field existed still deserialize.
+    #[test]
+    fn rule_condition_clause_case_sensitive_defaults_to_false() {
+        let json = r#"{"field":"subject","matcher":"contains","value":"invoice"}"#;
+        let parsed: RuleConditionClause = serde_json::from_str(json).unwrap();
+        assert!(!parsed.case_sensitive);
+    }
+
+    #[test]
+    fn rule_action_params_roundtrip() {
+        let value = RuleActionParams {
+            todo_title: Some("From rule".to_string()),
+            todo_description: None,
+            category_id: None,
+            due_date_offset_days: Some(7),
+            priority: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.todo_title, value.todo_title);
+        assert_eq!(parsed.due_date_offset_days, value.due_date_offset_days);
+    }
+
+    #[test]
+    fn decision_stats_roundtrips() {
+        let value = DecisionStats {
+            total: 100,
+            pending: 13,
+            approved: 60,
+            rejected: 20,
+            auto_approved: 7,
+            average_confidence: 0.82,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.total, value.total);
+        assert_eq!(parsed.average_confidence, value.average_confidence);
+    }
+
+    #[test]
+    fn batch_operation_response_roundtrips() {
+        let value = BatchOperationResponse {
+            successful: vec![Uuid::new_v4()],
+            failed: vec![BatchOperationFailure {
+                id: Uuid::new_v4(),
+                error: "already executed".to_string(),
+            }],
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.successful, value.successful);
+        assert_eq!(parsed.failed.len(), 1);
+        assert_eq!(parsed.failed[0].error, "already executed");
+    }
+
+    #[test]
+    fn calendar_attendee_roundtrips() {
+        let value = CalendarAttendee {
+            email: "someone@example.com".to_string(),
+            display_name: Some("Someone".to_string()),
+            response_status: Some("accepted".to_string()),
+            organizer: false,
+            self_: true,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.email, value.email);
+        assert!(parsed.self_);
+        // No serde rename, so the trailing underscore is part of the wire form.
+        assert!(json_of(&value).contains(r#""self_":true"#));
+    }
+
+    #[test]
+    fn email_list_query_roundtrips() {
+        let value = EmailListQuery {
+            account_id: Some(Uuid::new_v4()),
+            processed: Some(false),
+            from: Some("bank@example.com".to_string()),
+            subject: None,
+            since: Some(Utc::now()),
+            until: None,
+            limit: Some(50),
+            offset: Some(0),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.account_id, value.account_id);
+        assert_eq!(parsed.limit, value.limit);
+    }
+
+    #[test]
+    fn send_chat_message_request_roundtrips() {
+        let value = SendChatMessageRequest {
+            content: "what is pending?".to_string(),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.content, value.content);
     }
 }

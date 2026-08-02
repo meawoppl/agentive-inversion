@@ -7,6 +7,7 @@ use diesel_async::{
     },
     AsyncPgConnection, RunQueryDsl,
 };
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use shared_types::{AgentDecision, AgentRule, Category, ChatMessage, DecisionStatus, Todo};
 use uuid::Uuid;
 
@@ -69,6 +70,62 @@ pub async fn ping(pool: &DbPool) -> anyhow::Result<()> {
     let mut conn = get_conn(pool).await?;
     diesel::sql_query("SELECT 1").execute(&mut conn).await?;
     Ok(())
+}
+
+/// Embedded database migrations — compiled into the binary, so the container
+/// needs no migrations directory and no `psql` client.
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("../../migrations");
+
+/// Rewrite migration versions written by the old shell entrypoint into Diesel's
+/// canonical form.
+///
+/// The entrypoint recorded the whole directory name (`2024-01-01-000001_create_todos`),
+/// whereas Diesel records `version_from_string`: everything before the first
+/// `_`, with dashes stripped (`20240101000001`). Left alone, Diesel would see
+/// zero of the applied migrations and re-run all of them against a populated
+/// database.
+///
+/// Idempotent: after the first pass no version contains `_`, so the UPDATE
+/// matches nothing. Safe on a fresh database, where the table does not exist.
+const RECONCILE_LEGACY_MIGRATION_VERSIONS: &str = r#"
+DO $$
+BEGIN
+    IF to_regclass('public.__diesel_schema_migrations') IS NOT NULL THEN
+        UPDATE __diesel_schema_migrations
+        SET version = replace(split_part(version, '_', 1), '-', '')
+        WHERE position('_' in version) > 0;
+    END IF;
+END $$;
+"#;
+
+/// Run pending database migrations, returning the names of those applied.
+///
+/// Uses a short-lived synchronous connection: `MigrationHarness` is not
+/// implemented for `AsyncPgConnection`, and migrations run once at startup
+/// before the async pool is put to work.
+pub fn run_migrations() -> anyhow::Result<Vec<String>> {
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL environment variable must be set"))?;
+
+    let mut conn = PgConnection::establish(&database_url)
+        .map_err(|e| anyhow::anyhow!("Failed to connect for migrations: {}", e))?;
+
+    // Fully qualified: `diesel_async::RunQueryDsl` is also in scope in this
+    // module and would otherwise win method resolution.
+    diesel::RunQueryDsl::execute(
+        diesel::sql_query(RECONCILE_LEGACY_MIGRATION_VERSIONS),
+        &mut conn,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to reconcile legacy migration versions: {}", e))?;
+
+    let applied = conn
+        .run_pending_migrations(MIGRATIONS)
+        .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?
+        .iter()
+        .map(|m| m.to_string())
+        .collect();
+
+    Ok(applied)
 }
 
 pub fn establish_connection_pool() -> anyhow::Result<DbPool> {
@@ -1533,5 +1590,75 @@ pub mod google_accounts {
             .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    /// Mirrors `migrations_internals::version_from_string`: everything before
+    /// the first `_`, with dashes stripped. This is what Diesel records in
+    /// `__diesel_schema_migrations`, and what
+    /// [`super::RECONCILE_LEGACY_MIGRATION_VERSIONS`] rewrites legacy rows into.
+    fn diesel_version(dir_name: &str) -> String {
+        dir_name
+            .split('_')
+            .next()
+            .unwrap_or_default()
+            .replace('-', "")
+    }
+
+    fn migration_dir_names() -> Vec<String> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("migrations directory should exist")
+            .map(|entry| entry.expect("readable dir entry"))
+            .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn diesel_version_strips_description_and_dashes() {
+        assert_eq!(
+            diesel_version("2024-01-01-000001_create_todos"),
+            "20240101000001"
+        );
+        assert_eq!(
+            diesel_version("2026-01-18-181300-0000_create_agent_decisions"),
+            "202601181813000000"
+        );
+    }
+
+    /// Two migrations collapsing to the same version would make Diesel silently
+    /// skip one of them.
+    #[test]
+    fn migration_versions_are_unique() {
+        let mut seen: HashMap<String, String> = HashMap::new();
+        for name in migration_dir_names() {
+            let version = diesel_version(&name);
+            if let Some(previous) = seen.insert(version.clone(), name.clone()) {
+                panic!("migrations {previous} and {name} share version {version}");
+            }
+        }
+        assert!(!seen.is_empty(), "expected at least one migration");
+    }
+
+    /// Diesel applies migrations in version order. Dash stripping must not
+    /// reorder them relative to their directory names.
+    #[test]
+    fn migration_versions_sort_in_directory_order() {
+        let names = migration_dir_names();
+        let mut versions: Vec<String> = names.iter().map(|n| diesel_version(n)).collect();
+        let by_directory_order = versions.clone();
+        versions.sort();
+        assert_eq!(
+            versions, by_directory_order,
+            "version ordering disagrees with directory-name ordering"
+        );
     }
 }

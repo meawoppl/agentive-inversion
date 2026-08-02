@@ -2,6 +2,7 @@
 name = "backend"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 shared-types = { path = "../shared-types", features = ["diesel"] }
@@ -16,6 +17,7 @@ thiserror.workspace = true
 # Database
 diesel.workspace = true
 diesel-async.workspace = true
+diesel_migrations.workspace = true
 
 # Web framework
 axum.workspace = true
@@ -47,6 +49,14 @@ cookie = "0.18"
 google-calendar3 = "6.0.0"
 claude-codes = "2.1.220"
 tempfile = "3.27.0"
+
+# Pre-compressed static frontend assets (brotli/gzip, ETag/304, SPA fallback).
+# memory-serve 0.6.x is the axum-0.7 compatible line (2.x requires axum 0.8+).
+memory-serve = "0.6"
+# Pin alloc-stdlib: 0.2.3 bumped its alloc-no-stdlib dep to 3.0, which clashes
+# with brotli-decompressor 4.0.3 (still on alloc-no-stdlib 2.x) inside
+# memory-serve's brotli 6. Holding 0.2.2 keeps the graph on one version.
+alloc-stdlib = "=0.2.2"
 
 [dev-dependencies]
 tokio-test = "0.4"

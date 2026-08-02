@@ -35,23 +35,30 @@ cp .env.example .env
 # - Gmail and Calendar API credentials from Google Cloud Console
 ```
 
-### 3. Run Database Migrations
+### 3. Build the Frontend
+
+Required before the backend will compile — `memory-serve` embeds
+`crates/frontend/dist` into the binary at compile time:
 
 ```bash
-diesel migration run
+cd crates/frontend && trunk build
 ```
 
 ### 4. Start All Services
 
+The backend applies its embedded migrations on startup, so there is no separate
+migration step.
+
 Open 2 terminal windows:
 
-**Terminal 1 - Backend (includes the email poller):**
+**Terminal 1 - Backend (API, embedded frontend, and the pollers):**
 ```bash
 cargo run --bin backend
 # Backend will start on http://localhost:3000
+# Add --dev-mode to skip starting the Gmail and Calendar pollers
 ```
 
-**Terminal 2 - Frontend:**
+**Terminal 2 - Frontend with live reload (optional):**
 ```bash
 cd crates/frontend
 trunk serve
@@ -117,7 +124,7 @@ diesel migration list
 # Clear trunk cache
 rm -rf crates/frontend/dist
 
-# Rebuild
+# Rebuild — the backend will not compile until this directory exists again
 cd crates/frontend && trunk build
 ```
 

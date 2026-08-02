@@ -1,5 +1,7 @@
-# Unified Dockerfile for frontend + backend
-# Expects pre-built artifacts from CI/CD pipeline
+# Single-binary image: the Yew frontend is embedded into the backend binary by
+# memory-serve at build time, and migrations are embedded by diesel_migrations
+# and applied by the server on startup. CI compiles the binary, so there is no
+# Rust build stage here.
 #
 # Required environment variables:
 #   DATABASE_URL          - PostgreSQL connection string
@@ -10,15 +12,16 @@
 #   AUTH_REDIRECT_URI     - OAuth callback URL (e.g., https://your-domain.com/api/auth/callback)
 #
 # Optional environment variables:
+#   HOST                  - Bind address (default: 0.0.0.0)
+#   PORT                  - Bind port (default: 3000)
 #   RUST_LOG              - Log level (default: info)
 #   ANTHROPIC_API_KEY     - Enables the agentic triage pipeline (else keyword fallback)
-#   FRONTEND_DIR          - Frontend files path (default: /app/frontend/dist)
 #   CORS_ALLOWED_ORIGINS  - Comma-separated allowed CORS origins
 
 FROM debian:trixie-slim
 
 RUN apt-get update && \
-    apt-get install -y libpq5 postgresql-client ca-certificates curl && \
+    apt-get install -y ca-certificates libpq5 libssl3 curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Node.js + Claude Code CLI for the agentic triage pipeline. Without these
@@ -30,26 +33,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 
 WORKDIR /app
 
-# Copy pre-built backend binary
+# Copy pre-built backend binary (frontend assets and migrations are embedded)
 COPY ./target/release/backend /app/backend
 
 # Agent CLI used by triage agent sessions (must be on PATH)
 COPY ./target/release/agent-cli /usr/local/bin/agent-cli
 
-# Copy pre-built frontend dist
-COPY ./crates/frontend/dist /app/frontend/dist
+# Create non-root user. The triage pipeline shells out to the claude CLI, which
+# needs a writable HOME for ~/.claude.
+RUN useradd -m -u 1001 -s /bin/bash appuser && \
+    chown -R appuser:appuser /app
 
-# Copy migrations and seed data
-COPY migrations ./migrations
-COPY diesel.toml ./
-COPY seed-data.sql ./
-
-# Copy startup script
-COPY docker-entrypoint-backend.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
-# Set frontend directory for the server
-ENV FRONTEND_DIR=/app/frontend/dist
+USER appuser
+ENV HOME=/home/appuser
 
 EXPOSE 3000
 
@@ -58,4 +54,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
   CMD curl -fsS http://localhost:3000/health || exit 1
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["/app/backend"]

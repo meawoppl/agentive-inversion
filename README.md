@@ -91,6 +91,9 @@ GOOGLE_CLIENT_SECRET=your-client-secret
 
 ### 3. Database Setup
 
+The server applies its embedded migrations on startup, so this is only needed
+when iterating on migrations locally:
+
 ```bash
 diesel migration run
 ```
@@ -103,14 +106,25 @@ rustup target add wasm32-unknown-unknown
 
 ## Development
 
+### Build the Frontend First
+
+`memory-serve` embeds `crates/frontend/dist` into the backend binary at compile
+time, so the directory must exist before the backend will build:
+
+```bash
+cd crates/frontend && trunk build
+```
+
 ### Run All Services Locally
 
-Terminal 1 - Backend (includes the email poller):
+Terminal 1 - Backend (serves the API, the embedded frontend, and the pollers on
+port 3000). Add `--dev-mode` to skip starting the Gmail and Calendar pollers:
 ```bash
 cargo run --bin backend
 ```
 
-Terminal 2 - Frontend:
+Terminal 2 - Frontend with live reload (optional; port 8080, proxies to the
+backend):
 ```bash
 cd crates/frontend
 trunk serve
@@ -184,9 +198,12 @@ agentive-inversion/
 │   ├── backend/           # Axum REST API + background pollers
 │   ├── frontend/          # Yew WASM app
 │   └── shared-types/      # Common types
-├── migrations/            # Diesel migrations
+├── migrations/            # Diesel migrations (embedded into the binary)
+├── scripts/
+│   └── check-migration-names.sh  # CI lint for migration directory names
 ├── Cargo.toml            # Workspace config
 ├── diesel.toml           # Diesel config
+├── .cargo/audit.toml     # cargo-audit suppressions
 └── .env.example          # Environment template
 ```
 

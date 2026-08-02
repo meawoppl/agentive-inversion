@@ -165,6 +165,15 @@ pub async fn start_triage_task(pool: DbPool, auth_config: Arc<AuthConfig>, healt
                 config.archive_model,
                 config.action_model
             );
+            tracing::info!(
+                "Triage archive mode: {} ({})",
+                crate::services::triage::archive_mode(),
+                if crate::services::triage::archive_mode() == "execute" {
+                    "auto-archives on determination"
+                } else {
+                    "dry run - determinations recorded as proposals only"
+                }
+            );
             health.write().await.mode = "agentic".to_string();
         }
         Err(reason) => {
@@ -370,10 +379,25 @@ async fn run_stage(
         emails.len()
     );
 
-    let outputs = tokio::time::timeout(timeout, client.query(&prompt))
-        .await
-        .context("Agent session timed out")?
-        .context("Agent session failed")?;
+    let result = tokio::time::timeout(timeout, client.query(&prompt)).await;
+
+    // Always reap the claude subprocess — the crate does not kill on drop, so
+    // skipping shutdown on the error paths would orphan a session that keeps
+    // burning memory and tokens
+    let outputs = match result {
+        Ok(Ok(outputs)) => {
+            client.shutdown().await.ok();
+            outputs
+        }
+        Ok(Err(e)) => {
+            client.shutdown().await.ok();
+            return Err(e).context("Agent session failed");
+        }
+        Err(_) => {
+            client.shutdown().await.ok();
+            anyhow::bail!("Agent session timed out after {timeout:?}; claude process killed");
+        }
+    };
 
     for output in &outputs {
         if let claude_codes::ClaudeOutput::Result(r) = output {
@@ -388,6 +412,5 @@ async fn run_stage(
         }
     }
 
-    client.shutdown().await.ok();
     Ok(())
 }

@@ -133,6 +133,10 @@ async fn main() -> anyhow::Result<()> {
         // Triage pipeline routes (agent-cli + pipeline screen)
         .route("/triage/decisions", post(handlers::post_triage_decision))
         .route("/pipeline/stats", get(handlers::get_pipeline_stats))
+        .route(
+            "/pipeline/archive-review",
+            get(handlers::get_archive_review),
+        )
         // Chat routes
         .route("/chat", post(handlers::send_chat_message))
         .route("/chat/history", get(handlers::get_chat_history))

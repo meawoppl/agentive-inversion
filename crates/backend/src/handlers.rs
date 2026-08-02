@@ -5,15 +5,15 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use shared_types::{
     AboutMeResponse, AgentDecisionResponse, AgentRuleResponse, ApproveDecisionRequest,
-    BatchApproveDecisionsRequest, BatchOperationFailure, BatchOperationResponse,
-    BatchRejectDecisionsRequest, CalendarEventQuery, CalendarEventResponse, Category,
-    ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse, CreateAgentDecisionRequest,
-    CreateAgentRuleRequest, CreateCalendarEventRequest, CreateCalendarEventResponse,
-    CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailListQuery, EmailResponse,
-    GoogleAccountResponse, PipelineStatsResponse, RejectDecisionRequest, RuleListQuery,
-    SendChatMessageRequest, SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse,
-    TriageStageCount, UpdateAboutMeRequest, UpdateAgentRuleRequest, UpdateCategoryRequest,
-    UpdateTodoRequest,
+    ArchiveReviewItem, ArchiveReviewResponse, BatchApproveDecisionsRequest, BatchOperationFailure,
+    BatchOperationResponse, BatchRejectDecisionsRequest, CalendarEventQuery, CalendarEventResponse,
+    Category, ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse,
+    CreateAgentDecisionRequest, CreateAgentRuleRequest, CreateCalendarEventRequest,
+    CreateCalendarEventResponse, CreateCategoryRequest, CreateTodoRequest, DecisionStats,
+    EmailListQuery, EmailResponse, GoogleAccountResponse, PipelineStatsResponse,
+    RejectDecisionRequest, RuleListQuery, SendChatMessageRequest, SuggestedAction, Todo,
+    TriageDecideRequest, TriageDecideResponse, TriageStageCount, UpdateAboutMeRequest,
+    UpdateAgentRuleRequest, UpdateCategoryRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 
@@ -307,6 +307,51 @@ pub async fn get_pipeline_stats(
     }))
 }
 
+// Bulk audit surface for archive determinations (the dry-run review)
+pub async fn get_archive_review(
+    State(state): State<AppState>,
+) -> ApiResult<Json<ArchiveReviewResponse>> {
+    let mut conn = get_conn(&state.pool).await?;
+
+    let decisions_list = decisions::list_by_type(&mut conn, "archive", 500).await?;
+    let email_ids: Vec<Uuid> = decisions_list.iter().filter_map(|d| d.source_id).collect();
+    let emails_list = emails::list_by_ids(&mut conn, &email_ids).await?;
+    let accounts = google_accounts::list_all(&mut conn).await?;
+
+    let items = decisions_list
+        .into_iter()
+        .filter_map(|d| {
+            let email = d
+                .source_id
+                .and_then(|sid| emails_list.iter().find(|e| e.id == sid))?;
+            let account_email = accounts
+                .iter()
+                .find(|a| a.id == email.account_id)
+                .map(|a| a.email.clone())
+                .unwrap_or_default();
+            Some(ArchiveReviewItem {
+                decision_id: d.id,
+                email_id: email.id,
+                status: d.status.clone(),
+                confidence: d.confidence,
+                reasoning: d.reasoning.clone(),
+                decided_at: d.created_at,
+                account_email,
+                subject: email.subject.clone(),
+                from_address: email.from_address.clone(),
+                from_name: email.from_name.clone(),
+                received_at: email.received_at,
+                snippet: email.snippet.clone(),
+            })
+        })
+        .collect();
+
+    Ok(Json(ArchiveReviewResponse {
+        archive_mode: crate::services::triage::archive_mode(),
+        items,
+    }))
+}
+
 // ============================================================================
 // Agent Decision handlers
 // ============================================================================
@@ -380,20 +425,41 @@ pub async fn approve_decision(
 ) -> ApiResult<Json<AgentDecisionResponse>> {
     let mut conn = state.pool.get().await?;
     let result = DecisionService::approve(&mut conn, id, payload.modifications).await?;
-    let is_calendar = result.decision.decision_type == "create_calendar_event";
+    let decision_type = result.decision.decision_type.clone();
     drop(conn);
 
-    // Approving a gated calendar proposal executes the write
-    if is_calendar {
-        crate::services::TriageService::execute_calendar_decision(&state.pool, id)
-            .await
-            .map_err(ApiError::Internal)?;
+    // Approving a gated proposal executes its side effect
+    if execute_approved_side_effect(&state, id, &decision_type).await? {
         let mut conn = state.pool.get().await?;
         let refreshed = decisions::get_by_id(&mut conn, id).await?;
         return Ok(Json(refreshed.into()));
     }
 
     Ok(Json(result.decision.into()))
+}
+
+/// Run the external side effect for an approved decision, if it has one.
+/// Returns true when something executed (caller should re-read the decision).
+async fn execute_approved_side_effect(
+    state: &AppState,
+    decision_id: Uuid,
+    decision_type: &str,
+) -> Result<bool, ApiError> {
+    match decision_type {
+        "create_calendar_event" => {
+            crate::services::TriageService::execute_calendar_decision(&state.pool, decision_id)
+                .await
+                .map_err(ApiError::Internal)?;
+            Ok(true)
+        }
+        "archive" => {
+            crate::services::TriageService::execute_archive_decision(&state.pool, decision_id)
+                .await
+                .map_err(ApiError::Internal)?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 pub async fn reject_decision(
@@ -417,7 +483,7 @@ pub async fn batch_approve_decisions(
     Json(payload): Json<BatchApproveDecisionsRequest>,
 ) -> ApiResult<Json<BatchOperationResponse>> {
     let result = DecisionService::batch_approve(&state.pool, payload.decision_ids).await?;
-    let failed = result
+    let mut failed: Vec<BatchOperationFailure> = result
         .failed
         .into_iter()
         .map(|f| BatchOperationFailure {
@@ -425,10 +491,25 @@ pub async fn batch_approve_decisions(
             error: f.error,
         })
         .collect();
-    Ok(Json(BatchOperationResponse {
-        successful: result.successful,
-        failed,
-    }))
+
+    // Execute side effects (archives, calendar writes) per approved decision;
+    // an execution failure downgrades that id to failed rather than aborting
+    let mut successful = Vec::with_capacity(result.successful.len());
+    for id in result.successful {
+        let decision_type = {
+            let mut conn = state.pool.get().await?;
+            decisions::get_by_id(&mut conn, id).await?.decision_type
+        };
+        match execute_approved_side_effect(&state, id, &decision_type).await {
+            Ok(_) => successful.push(id),
+            Err(e) => failed.push(BatchOperationFailure {
+                id,
+                error: format!("approved but execution failed: {e:?}"),
+            }),
+        }
+    }
+
+    Ok(Json(BatchOperationResponse { successful, failed }))
 }
 
 pub async fn batch_reject_decisions(

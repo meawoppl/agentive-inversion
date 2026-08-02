@@ -343,6 +343,18 @@ pub mod emails {
         Ok(())
     }
 
+    /// Load a set of emails by primary key
+    pub async fn list_by_ids(
+        conn: &mut AsyncPgConnection,
+        ids: &[Uuid],
+    ) -> anyhow::Result<Vec<Email>> {
+        use crate::schema::emails::dsl::*;
+
+        let items = emails.filter(id.eq_any(ids)).load::<Email>(conn).await?;
+
+        Ok(items)
+    }
+
     /// List emails in a given triage state, oldest first
     pub async fn list_by_triage_status(
         conn: &mut AsyncPgConnection,
@@ -568,6 +580,24 @@ pub mod decisions {
         let rows = agent_decisions
             .filter(status.eq(DecisionStatus::Proposed.as_str()))
             .order_by(created_at.desc())
+            .load::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    /// List decisions of one type, newest first
+    pub async fn list_by_type(
+        conn: &mut AsyncPgConnection,
+        decision_type_val: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<AgentDecision>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let rows = agent_decisions
+            .filter(decision_type.eq(decision_type_val))
+            .order_by(created_at.desc())
+            .limit(limit)
             .load::<AgentDecisionRow>(conn)
             .await?;
 

@@ -18,7 +18,17 @@ Install Docker and Docker Compose:
 
 ## Quick Start
 
-### 1. Start Everything
+### 1. Build the Binary
+
+The image copies a pre-built binary rather than compiling inside Docker, and
+the frontend is embedded into that binary at compile time. Build both first:
+
+```bash
+cd crates/frontend && trunk build --release && cd ../..
+cargo build --release --bin backend
+```
+
+### 2. Start Everything
 
 ```bash
 docker-compose up --build
@@ -26,16 +36,16 @@ docker-compose up --build
 
 This will:
 1. Start PostgreSQL database
-2. Build and start the app (runs migrations)
+2. Start the app, which applies its embedded migrations before serving
 
-### 2. Access the Application
+### 3. Access the Application
 
 Once all services are running:
 - **Application**: http://localhost:3000
 - **Health Check**: http://localhost:3000/health
 - **API**: http://localhost:3000/api/*
 
-### 3. Stop Everything
+### 4. Stop Everything
 
 ```bash
 # Stop and remove containers
@@ -195,7 +205,8 @@ docker-compose logs app
 
 Common issues:
 - Database not ready: Wait for postgres health check
-- Migration errors: Check `migrations/` directory
+- Migration errors: the server logs the failing migration and exits non-zero.
+  Migrations are embedded in the binary, so a fix requires a rebuild
 
 ## Differences from Production
 

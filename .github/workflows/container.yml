@@ -11,10 +11,12 @@ env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Pinned so a trunk release cannot silently change the wasm output.
+  TRUNK_VERSION: v0.21.14
 
 jobs:
-  build:
-    name: Build Artifacts
+  build-release:
+    name: Build Release Binary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,73 +26,54 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: "release"
 
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build release binaries
-        run: cargo build --release --bin backend --bin agent-cli
-
+      # Installed from a prebuilt binary: building trunk from source broke
+      # upstream.
       - name: Install Trunk
-        run: wget -qO- https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xzf- -C ~/.cargo/bin
+        run: wget -qO- "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xzf- -C ~/.cargo/bin
 
-      - name: Build frontend
+      # Must precede the backend build: memory-serve embeds crates/frontend/dist
+      # into the binary at compile time.
+      - name: Build frontend (release)
         run: cd crates/frontend && trunk build --release
 
-      - name: Upload backend binary
+      - name: Build binaries (backend embeds frontend assets and migrations)
+        run: cargo build --release --locked --bin backend --bin agent-cli
+
+      - name: Upload release binaries
         uses: actions/upload-artifact@v4
         with:
-          name: backend-binary
+          name: backend-linux-x86_64
           path: |
             target/release/backend
             target/release/agent-cli
-          retention-days: 1
-
-      - name: Upload frontend dist
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-dist
-          path: crates/frontend/dist
-          retention-days: 1
+          retention-days: 7
 
   container:
     name: Build Container
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-release
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download backend binary
+      - name: Download release binaries
         uses: actions/download-artifact@v4
         with:
-          name: backend-binary
+          name: backend-linux-x86_64
           path: target/release
-
-      - name: Download frontend dist
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: crates/frontend/dist
 
       - name: Make binaries executable
         run: chmod +x target/release/backend target/release/agent-cli
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
@@ -105,6 +88,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `type=ref,event=branch` produces the `:main` tag that watchtower
+          # polls on the production host. Do not remove it.
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -119,3 +104,5 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

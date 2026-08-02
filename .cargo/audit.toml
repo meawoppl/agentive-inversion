@@ -1,0 +1,22 @@
+# cargo-audit configuration.
+#
+# Every entry below is a diesel 2.1 advisory whose fix requires diesel >= 2.2.3
+# or >= 2.3.8. diesel-async 0.4 pins `diesel = "~2.1.1"`, so the upgrade is
+# blocked on moving to diesel-async 0.9 — tracked in issue #91.
+#
+# Nothing else may be added here. Fix the advisory or bump the dependency.
+
+[advisories]
+ignore = [
+    # Binary protocol misinterpretation from truncating/overflowing casts.
+    # Affects the postgres backend. Patched in diesel >= 2.2.3. Blocked by #91.
+    "RUSTSEC-2024-0365",
+
+    # Command injection in diesel's `COPY FROM` / `COPY TO`. This codebase
+    # issues no COPY statements. Patched in diesel >= 2.3.8. Blocked by #91.
+    "RUSTSEC-2026-0136",
+
+    # Unaligned data access in `SqliteAggregate` implementations. The SQLite
+    # backend is not enabled here. Patched in diesel >= 2.3.8. Blocked by #91.
+    "RUSTSEC-2026-0137",
+]

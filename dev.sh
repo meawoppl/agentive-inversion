@@ -105,6 +105,17 @@ start_services() {
     # Create directories
     mkdir -p "$PID_DIR" "$LOG_DIR"
 
+    # memory-serve embeds crates/frontend/dist into the backend binary at
+    # compile time, so the directory has to exist before the backend builds.
+    if [ ! -d crates/frontend/dist ]; then
+        echo -e "${BLUE}Building frontend (required before the backend compiles)...${NC}"
+        (cd crates/frontend && trunk build) || {
+            echo -e "${RED}Frontend build failed${NC}"
+            exit 1
+        }
+        echo -e "${GREEN}✓ Frontend built${NC}"
+    fi
+
     # Check if already running
     if is_running "$BACKEND_PID"; then
         echo -e "${YELLOW}Backend already running (PID: $(cat $BACKEND_PID))${NC}"

@@ -124,6 +124,15 @@ cargo clippy --workspace         # Lint code
 - Write directly to database
 - Spawned from `crates/backend/src/main.rs`
 
+### Agentic Triage Pipeline
+- Lives in `crates/backend/src/pollers/triage.rs` (orchestrator) + `services/triage.rs` (policy)
+- Three Claude Code sessions per cycle via the `claude-codes` crate: Haiku screening, Sonnet 4.5 archive determinations (auto-executed, Gmail label `agent-archived`), Opus 4.8 action pass (reads about_me, proposes todos)
+- Agents act ONLY through the `agent-cli` binary -> REST API (`POST /api/triage/decisions`); never give agents direct DB access
+- INVARIANT: ingestion is never gated on triage; Anthropic/API failures must never touch Gmail-sync health or backoff (separate failure domains)
+- Calendar writes are gated: agents propose `create_calendar_event` decisions; approval executes to the "Agent" calendar
+- Requires `claude` binary + `ANTHROPIC_API_KEY` in the container; otherwise mode=disabled and the keyword heuristic fallback runs
+- Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them
+
 ## Environment Variables
 
 Required variables (see `.env.example`):

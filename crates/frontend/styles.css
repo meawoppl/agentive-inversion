@@ -1960,3 +1960,97 @@ main {
     color: #e74c3c;
     font-weight: 500;
 }
+
+/* Pipeline view */
+.pipeline-view {
+    padding: 1.5rem;
+}
+
+.pipeline-mode {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+}
+
+.pipeline-mode.mode-agentic {
+    background: #e6f7ed;
+    color: #1a7f37;
+}
+
+.pipeline-mode.mode-disabled {
+    background: #fff4e5;
+    color: #9a6700;
+}
+
+.pipeline-stages {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.pipeline-stage-card {
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border-color, #e1e4e8);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+}
+
+.pipeline-stage-count {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.pipeline-stage-label {
+    color: var(--text-secondary, #57606a);
+    font-size: 0.85rem;
+    margin-top: 0.25rem;
+}
+
+.error-banner {
+    background: #ffebe9;
+    color: #cf222e;
+    border: 1px solid #ff818266;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+
+/* About-me editor */
+.about-me-editor {
+    padding: 1.5rem;
+    max-width: 800px;
+}
+
+.about-me-hint {
+    color: var(--text-secondary, #57606a);
+    margin-bottom: 1rem;
+}
+
+.about-me-textarea {
+    width: 100%;
+    font-family: inherit;
+    font-size: 0.95rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color, #e1e4e8);
+    border-radius: 8px;
+    resize: vertical;
+}
+
+.about-me-actions {
+    margin-top: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.about-me-status {
+    color: var(--text-secondary, #57606a);
+}
+
+.gate-note {
+    font-style: italic;
+    color: var(--text-secondary, #57606a);
+}

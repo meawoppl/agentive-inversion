@@ -11,6 +11,7 @@
 #
 # Optional environment variables:
 #   RUST_LOG              - Log level (default: info)
+#   ANTHROPIC_API_KEY     - Enables the agentic triage pipeline (else keyword fallback)
 #   FRONTEND_DIR          - Frontend files path (default: /app/frontend/dist)
 #   CORS_ALLOWED_ORIGINS  - Comma-separated allowed CORS origins
 
@@ -20,10 +21,20 @@ RUN apt-get update && \
     apt-get install -y libpq5 postgresql-client ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
+# Node.js + Claude Code CLI for the agentic triage pipeline. Without these
+# (or without ANTHROPIC_API_KEY) the backend runs in keyword-fallback mode.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g @anthropic-ai/claude-code && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy pre-built backend binary
 COPY ./target/release/backend /app/backend
+
+# Agent CLI used by triage agent sessions (must be on PATH)
+COPY ./target/release/agent-cli /usr/local/bin/agent-cli
 
 # Copy pre-built frontend dist
 COPY ./crates/frontend/dist /app/frontend/dist

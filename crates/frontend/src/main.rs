@@ -1,10 +1,11 @@
 use gloo_net::http::Request;
 use shared_types::{
-    AgentDecisionResponse, ApproveDecisionRequest, AuthUserResponse, BatchApproveDecisionsRequest,
-    BatchRejectDecisionsRequest, CalendarEventResponse, Category, ChatMessageResponse,
-    ChatResponse, CreateTodoRequest, DecisionStats, EmailResponse, GoogleAccountResponse,
-    LoginInitResponse, ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest,
-    SuggestedAction, Todo, UpdateTodoRequest,
+    AboutMeResponse, AgentDecisionResponse, ApproveDecisionRequest, AuthUserResponse,
+    BatchApproveDecisionsRequest, BatchRejectDecisionsRequest, CalendarEventResponse, Category,
+    ChatMessageResponse, ChatResponse, CreateTodoRequest, DecisionStats, EmailResponse,
+    GoogleAccountResponse, LoginInitResponse, PipelineStatsResponse, ProposedCalendarEventAction,
+    ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest, SuggestedAction, Todo,
+    UpdateAboutMeRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 use web_sys::{Element, HtmlInputElement};
@@ -37,6 +38,8 @@ pub enum View {
     Calendar,
     DecisionLog,
     Categories,
+    Pipeline,
+    AboutMe,
 }
 
 /// Sort options for the todo list
@@ -518,6 +521,16 @@ fn authenticated_app(props: &AuthenticatedAppProps) -> Html {
         Callback::from(move |_| set_view.emit(View::Calendar))
     };
 
+    let set_view_pipeline = {
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::Pipeline))
+    };
+
+    let set_view_about_me = {
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::AboutMe))
+    };
+
     let on_logout = props.on_logout.clone();
 
     html! {
@@ -573,6 +586,18 @@ fn authenticated_app(props: &AuthenticatedAppProps) -> Html {
                     >
                         {"Categories"}
                     </button>
+                    <button
+                        class={if current_view == View::Pipeline { "nav-btn active" } else { "nav-btn" }}
+                        onclick={set_view_pipeline}
+                    >
+                        {"Pipeline"}
+                    </button>
+                    <button
+                        class={if current_view == View::AboutMe { "nav-btn active" } else { "nav-btn" }}
+                        onclick={set_view_about_me}
+                    >
+                        {"About Me"}
+                    </button>
                 </nav>
             </header>
             <main>
@@ -582,6 +607,8 @@ fn authenticated_app(props: &AuthenticatedAppProps) -> Html {
                     View::Calendar => html! { <CalendarView /> },
                     View::DecisionLog => html! { <DecisionLog /> },
                     View::Categories => html! { <CategoryManager /> },
+                    View::Pipeline => html! { <PipelineView /> },
+                    View::AboutMe => html! { <AboutMeEditor /> },
                 }}
             </main>
             <ChatWidget />
@@ -1015,8 +1042,17 @@ struct DecisionDetailProps {
 #[function_component(DecisionDetailView)]
 fn decision_detail_view(props: &DecisionDetailProps) -> Html {
     let decision = &props.decision;
-    let proposed: Option<ProposedTodoAction> =
-        serde_json::from_value(decision.proposed_action.clone()).ok();
+    let proposed: Option<ProposedTodoAction> = if decision.decision_type == "create_todo" {
+        serde_json::from_value(decision.proposed_action.clone()).ok()
+    } else {
+        None
+    };
+    let proposed_event: Option<ProposedCalendarEventAction> =
+        if decision.decision_type == "create_calendar_event" {
+            serde_json::from_value(decision.proposed_action.clone()).ok()
+        } else {
+            None
+        };
 
     html! {
         <div class="decision-detail">
@@ -1038,6 +1074,37 @@ fn decision_detail_view(props: &DecisionDetailProps) -> Html {
                     {format!("Confidence: {}% ({})", (decision.confidence * 100.0) as i32, decision.confidence_level)}
                 </p>
             </div>
+
+            {if let Some(event) = proposed_event {
+                html! {
+                    <div class="detail-section">
+                        <h4>{"Proposed Calendar Event"}</h4>
+                        <p><strong>{"Summary: "}</strong>{&event.summary}</p>
+                        <p><strong>{"When: "}</strong>{format!("{} \u{2192} {}",
+                            event.start.format("%a %b %-d, %H:%M"),
+                            event.end.format("%H:%M UTC"))}</p>
+                        {if let Some(loc) = &event.location {
+                            html! { <p><strong>{"Where: "}</strong>{loc}</p> }
+                        } else {
+                            html! {}
+                        }}
+                        {if let Some(desc) = &event.description {
+                            html! { <p><strong>{"Details: "}</strong>{desc}</p> }
+                        } else {
+                            html! {}
+                        }}
+                        <p><strong>{"Calendar: "}</strong>{event.calendar_name.clone().unwrap_or_else(|| "Agent".to_string())}</p>
+                        {if let Some(link) = &event.email_link {
+                            html! { <p><a href={link.clone()} target="_blank">{"Source email"}</a></p> }
+                        } else {
+                            html! {}
+                        }}
+                        <p class="gate-note">{"Approving creates this event on your Agent calendar."}</p>
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
 
             {if let Some(action) = proposed {
                 html! {
@@ -2306,6 +2373,187 @@ fn chat_widget() -> Html {
                 }
             } else {
                 html! {}
+            }}
+        </div>
+    }
+}
+
+/// Pipeline infrastructure screen: triage mode, health, and stage counts
+#[function_component(PipelineView)]
+fn pipeline_view() -> Html {
+    let stats = use_state(|| None::<PipelineStatsResponse>);
+    let error = use_state(|| None::<String>);
+
+    {
+        let stats = stats.clone();
+        let error = error.clone();
+        use_effect_with((), move |_| {
+            let stats = stats.clone();
+            let error = error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match Request::get("/api/pipeline/stats").send().await {
+                    Ok(resp) if resp.ok() => match resp.json::<PipelineStatsResponse>().await {
+                        Ok(data) => stats.set(Some(data)),
+                        Err(e) => error.set(Some(format!("Bad response: {e}"))),
+                    },
+                    Ok(resp) => error.set(Some(format!("API error: {}", resp.status()))),
+                    Err(e) => error.set(Some(format!("Request failed: {e}"))),
+                }
+            });
+            || ()
+        });
+    }
+
+    let stage_order = [
+        ("pending", "Pending screening"),
+        ("archive_candidate", "Awaiting archive determination"),
+        ("archived", "Archived by agent"),
+        ("event_proposed", "Calendar events proposed"),
+        ("action_queued", "Queued for action pass"),
+        ("todo_proposed", "Todos proposed"),
+        ("kept", "Kept in inbox"),
+        ("ignored", "Ignored"),
+    ];
+
+    html! {
+        <div class="pipeline-view">
+            <h2>{"Triage Pipeline"}</h2>
+            {if let Some(err) = (*error).clone() {
+                html! { <div class="error-banner">{err}</div> }
+            } else {
+                html! {}
+            }}
+            {if let Some(s) = (*stats).clone() {
+                let count_for = |key: &str| {
+                    s.stage_counts
+                        .iter()
+                        .find(|c| c.status == key)
+                        .map(|c| c.count)
+                        .unwrap_or(0)
+                };
+                html! {
+                    <>
+                        <div class={if s.mode == "agentic" { "pipeline-mode mode-agentic" } else { "pipeline-mode mode-disabled" }}>
+                            <span class="pipeline-mode-label">{"Mode: "}</span>
+                            <strong>{&s.mode}</strong>
+                            {if let Some(t) = &s.last_cycle_at {
+                                html! { <span class="pipeline-last-cycle">{format!(" — last cycle {}", t.format("%H:%M:%S UTC"))}</span> }
+                            } else {
+                                html! {}
+                            }}
+                        </div>
+                        {if let Some(e) = &s.last_cycle_error {
+                            html! { <div class="error-banner">{format!("Last cycle error ({} consecutive): {}", s.consecutive_failures, e)}</div> }
+                        } else {
+                            html! {}
+                        }}
+                        <div class="pipeline-stages">
+                            {stage_order.iter().map(|(key, label)| {
+                                html! {
+                                    <div class="pipeline-stage-card" key={*key}>
+                                        <div class="pipeline-stage-count">{count_for(key)}</div>
+                                        <div class="pipeline-stage-label">{*label}</div>
+                                    </div>
+                                }
+                            }).collect::<Html>()}
+                        </div>
+                    </>
+                }
+            } else {
+                html! { <p>{"Loading..."}</p> }
+            }}
+        </div>
+    }
+}
+
+/// Editor for the about-me document the action-stage agent reads
+#[function_component(AboutMeEditor)]
+fn about_me_editor() -> Html {
+    let content = use_state(String::new);
+    let status = use_state(|| None::<String>);
+    let loaded = use_state(|| false);
+
+    {
+        let content = content.clone();
+        let loaded = loaded.clone();
+        use_effect_with((), move |_| {
+            let content = content.clone();
+            let loaded = loaded.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(resp) = Request::get("/api/about-me").send().await {
+                    if resp.ok() {
+                        if let Ok(doc) = resp.json::<AboutMeResponse>().await {
+                            content.set(doc.content);
+                        }
+                    }
+                }
+                loaded.set(true);
+            });
+            || ()
+        });
+    }
+
+    let on_input = {
+        let content = content.clone();
+        Callback::from(move |e: InputEvent| {
+            let target: web_sys::HtmlTextAreaElement = e.target_unchecked_into();
+            content.set(target.value());
+        })
+    };
+
+    let on_save = {
+        let content = content.clone();
+        let status = status.clone();
+        Callback::from(move |_| {
+            let body = UpdateAboutMeRequest {
+                content: (*content).clone(),
+            };
+            let status = status.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = Request::put("/api/about-me")
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .expect("serializable body")
+                    .send()
+                    .await;
+                match result {
+                    Ok(resp) if resp.ok() => status.set(Some("Saved".to_string())),
+                    Ok(resp) => status.set(Some(format!("Save failed: {}", resp.status()))),
+                    Err(e) => status.set(Some(format!("Save failed: {e}"))),
+                }
+            });
+        })
+    };
+
+    html! {
+        <div class="about-me-editor">
+            <h2>{"About Me"}</h2>
+            <p class="about-me-hint">
+                {"The triage agent reads this before deciding what belongs on your todo \
+                  list. Describe who you are, active projects, what deserves a todo, \
+                  senders who always matter, and what is noise."}
+            </p>
+            {if *loaded {
+                html! {
+                    <>
+                        <textarea
+                            class="about-me-textarea"
+                            rows="24"
+                            value={(*content).clone()}
+                            oninput={on_input}
+                        />
+                        <div class="about-me-actions">
+                            <button class="btn-primary" onclick={on_save}>{"Save"}</button>
+                            {if let Some(msg) = (*status).clone() {
+                                html! { <span class="about-me-status">{msg}</span> }
+                            } else {
+                                html! {}
+                            }}
+                        </div>
+                    </>
+                }
+            } else {
+                html! { <p>{"Loading..."}</p> }
             }}
         </div>
     }

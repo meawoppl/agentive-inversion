@@ -343,6 +343,24 @@ pub mod emails {
         Ok(())
     }
 
+    /// List emails in a given triage state, oldest first
+    pub async fn list_by_triage_status(
+        conn: &mut AsyncPgConnection,
+        status: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Email>> {
+        use crate::schema::emails::dsl::*;
+
+        let items = emails
+            .filter(triage_status.eq(status))
+            .order_by(fetched_at.asc())
+            .limit(limit)
+            .load::<Email>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
     /// List emails awaiting triage by the agent pipeline, oldest first
     pub async fn list_pending_triage(
         conn: &mut AsyncPgConnection,
@@ -1350,6 +1368,21 @@ pub mod google_accounts {
             .await?;
 
         Ok(accounts)
+    }
+
+    /// Look up an account by primary key
+    pub async fn get_by_id(
+        conn: &mut AsyncPgConnection,
+        account_id: Uuid,
+    ) -> anyhow::Result<GoogleAccount> {
+        use crate::schema::google_accounts::dsl::*;
+
+        let account = google_accounts
+            .filter(id.eq(account_id))
+            .first::<GoogleAccount>(conn)
+            .await?;
+
+        Ok(account)
     }
 
     /// Look up an account by email address

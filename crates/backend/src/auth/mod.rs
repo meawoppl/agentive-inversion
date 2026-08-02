@@ -7,7 +7,7 @@
 //! - Email allowlist validation
 
 mod handlers;
-mod jwt;
+pub(crate) mod jwt;
 mod middleware;
 pub mod types;
 

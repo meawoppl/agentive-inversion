@@ -101,7 +101,7 @@ struct AccountState {
 }
 
 /// Start the email polling background task
-pub async fn start_email_polling_task(pool: DbPool) {
+pub async fn start_email_polling_task(pool: DbPool, triage_health: super::TriageHealth) {
     let config = EmailPollerConfig::from_env();
 
     tracing::info!(
@@ -114,7 +114,14 @@ pub async fn start_email_polling_task(pool: DbPool) {
     let mut account_states: HashMap<Uuid, AccountState> = HashMap::new();
 
     loop {
-        if let Err(e) = run_poll_cycle(&pool, &config, &mut rate_limiter, &mut account_states).await
+        if let Err(e) = run_poll_cycle(
+            &pool,
+            &config,
+            &mut rate_limiter,
+            &mut account_states,
+            &triage_health,
+        )
+        .await
         {
             tracing::error!("Email poll cycle failed: {}", e);
         }
@@ -128,6 +135,7 @@ async fn run_poll_cycle(
     config: &EmailPollerConfig,
     rate_limiter: &mut RateLimiter,
     account_states: &mut HashMap<Uuid, AccountState>,
+    triage_health: &super::TriageHealth,
 ) -> Result<()> {
     let mut conn = pool.get().await.context("Failed to get DB connection")?;
 
@@ -203,7 +211,11 @@ async fn run_poll_cycle(
         }
     }
 
-    // Process any unprocessed emails
+    // Keyword-heuristic fallback: only when the agentic pipeline is disabled.
+    // With triage active, classification happens in the triage task instead.
+    if triage_health.read().await.mode == "agentic" {
+        return Ok(());
+    }
     match processor::process_pending_emails(pool, config.max_process_per_cycle).await {
         Ok(stats) => {
             if stats.processed > 0 {

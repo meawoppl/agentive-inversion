@@ -177,6 +177,12 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
+    // Route log-facade records into tracing. claude-codes logs through `log`,
+    // and its "LoginFlow dropped while unfinished" warn is load-bearing login
+    // forensics: its absence must mean the drop didn't happen, not that the
+    // record was discarded. The registry() path installs no bridge on its own.
+    tracing_log::LogTracer::init().expect("Failed to install log-to-tracing bridge");
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()

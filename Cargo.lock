@@ -428,9 +428,10 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 [[package]]
 name = "claude-codes"
 version = "2.1.220"
-source = "git+https://github.com/meawoppl/rust-code-agent-sdks?rev=3fe682e66d73df52f4e4cc5a256b10c3031e2290#3fe682e66d73df52f4e4cc5a256b10c3031e2290"
+source = "git+https://github.com/meawoppl/rust-code-agent-sdks?rev=828e520572e67ad72f070c1ed657f7ca64e76d4d#828e520572e67ad72f070c1ed657f7ca64e76d4d"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "log",
  "portable-pty",

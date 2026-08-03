@@ -2090,3 +2090,12 @@ main {
 .claude-auth-flow a {
     word-break: break-all;
 }
+
+/* Click-away layer for popovers: sits under the dropdown (z-index 100),
+   over everything else, and dismisses on any click */
+.popover-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    background: transparent;
+}

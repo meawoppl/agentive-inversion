@@ -168,6 +168,24 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
         .layer(config.cors_layer())
 }
 
+/// Install the global tracing subscriber, exactly once.
+///
+/// Do NOT add a separate `tracing_log::LogTracer::init()` here: `.init()`
+/// already installs the log-facade bridge (tracing-subscriber's default
+/// `tracing-log` feature), so log-crate records from dependencies such as
+/// claude-codes reach this subscriber. A second install returns
+/// `SetLoggerError`, which `.init()` unwraps into a panic before the server
+/// binds — that crash-looped production on 2026-08-03 (#106).
+fn init_tracing() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,tower_http=info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -177,19 +195,7 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    // Route log-facade records into tracing. claude-codes logs through `log`,
-    // and its "LoginFlow dropped while unfinished" warn is load-bearing login
-    // forensics: its absence must mean the drop didn't happen, not that the
-    // record was discarded. The registry() path installs no bridge on its own.
-    tracing_log::LogTracer::init().expect("Failed to install log-to-tracing bridge");
-
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    init_tracing();
 
     // Log panics with their source location and a backtrace via tracing, so
     // crashes are captured in structured logs rather than only on stderr.
@@ -379,6 +385,18 @@ mod tests {
     use diesel_async::pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager};
     use diesel_async::AsyncPgConnection;
     use tower::ServiceExt;
+
+    /// Boot smoke test: init_tracing() performs two global installs (the
+    /// tracing dispatcher and, via tracing-subscriber's `tracing-log`
+    /// feature, the log-facade logger). Both are set-once process-wide, so a
+    /// duplicate install anywhere in the init path panics here the same way
+    /// it would in main() — which took production down on 2026-08-03 (#106)
+    /// with every CI check green. Keep this the ONLY test that installs a
+    /// subscriber.
+    #[test]
+    fn init_tracing_boots_without_panicking() {
+        init_tracing();
+    }
 
     /// State with a pool that is never actually connected. deadpool builds
     /// connections lazily, so routes that don't touch the database — asset

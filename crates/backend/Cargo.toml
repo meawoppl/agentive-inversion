@@ -57,7 +57,6 @@ memory-serve = "0.6"
 # with brotli-decompressor 4.0.3 (still on alloc-no-stdlib 2.x) inside
 # memory-serve's brotli 6. Holding 0.2.2 keeps the graph on one version.
 alloc-stdlib = "=0.2.2"
-tracing-log = "0.2.0"
 
 [dev-dependencies]
 tokio-test = "0.4"

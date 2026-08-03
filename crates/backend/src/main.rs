@@ -44,9 +44,12 @@ pub struct AppState {
     pub pool: db::DbPool,
     pub auth_config: Arc<AuthConfig>,
     pub triage_health: pollers::TriageHealth,
-    /// In-flight interactive Claude Code login, if any (single-user app:
-    /// one flow at a time; replacing a flow cancels the previous one)
-    pub claude_login: Arc<std::sync::Mutex<Option<claude_codes::auth::LoginFlow>>>,
+    /// In-flight interactive Claude Code login with its start time, if any
+    /// (single-user app: one flow at a time; replacing a flow cancels the
+    /// previous one, and a reaper expires abandoned flows after a TTL so a
+    /// forgotten login can't leave a PTY child alive indefinitely)
+    pub claude_login:
+        Arc<std::sync::Mutex<Option<(claude_codes::auth::LoginFlow, std::time::Instant)>>>,
 }
 
 /// Build the full application router from shared state.
@@ -248,6 +251,31 @@ async fn main() -> anyhow::Result<()> {
         triage_health: triage_health.clone(),
         claude_login: Arc::new(std::sync::Mutex::new(None)),
     };
+
+    // Reap abandoned Claude login flows so a forgotten PTY child can't
+    // linger inside the container's memory budget (runs in dev mode too:
+    // the login flow exists regardless of the pollers)
+    let login_reaper_state = app_state.claude_login.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            let expired = {
+                let mut slot = login_reaper_state
+                    .lock()
+                    .expect("claude_login mutex poisoned");
+                match slot.as_ref() {
+                    Some((_, started)) if started.elapsed() > handlers::LOGIN_FLOW_TTL => {
+                        slot.take()
+                    }
+                    _ => None,
+                }
+            };
+            if expired.is_some() {
+                tracing::info!("Reaped abandoned Claude login flow (TTL exceeded)");
+            }
+        }
+    });
 
     if !args.dev_mode {
         // Start email polling background task (ingestion is never gated on triage)

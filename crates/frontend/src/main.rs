@@ -2484,11 +2484,27 @@ fn claude_auth_card() -> Html {
                         code.set(String::new());
                         refresh.emit(());
                     }
-                    Ok(resp) => {
+                    Ok(resp) if resp.status() == 400 => {
+                        // Code rejected: the same login session is still alive
+                        // awaiting a corrected paste, so keep the URL + input
                         let text = resp.text().await.unwrap_or_default();
-                        error.set(Some(format!("Login failed ({}): {}", resp.status(), text)));
+                        error.set(Some(text));
                     }
-                    Err(e) => error.set(Some(format!("Login failed: {e}"))),
+                    Ok(resp) => {
+                        // Fatal (expired flow, CLI failure): reset to step one
+                        let text = resp.text().await.unwrap_or_default();
+                        auth_url.set(None);
+                        code.set(String::new());
+                        error.set(Some(format!(
+                            "Login failed ({}): {} - click Login to start over",
+                            resp.status(),
+                            text
+                        )));
+                    }
+                    Err(e) => {
+                        auth_url.set(None);
+                        error.set(Some(format!("Login failed: {e}")));
+                    }
                 }
                 busy.set(false);
             });

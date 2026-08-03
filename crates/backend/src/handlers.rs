@@ -312,10 +312,16 @@ pub async fn get_pipeline_stats(
 // Claude Code login flow (mints the pipeline's subscription credential)
 // ============================================================================
 
+/// Abandoned login flows are reaped after this long (see the reaper task in
+/// main.rs); complete also refuses flows older than this
+pub const LOGIN_FLOW_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
 pub async fn claude_auth_start(
     State(state): State<AppState>,
 ) -> ApiResult<Json<ClaudeAuthStartResponse>> {
     use claude_codes::auth::{LoginFlow, LoginMode};
+
+    tracing::info!("Claude login: starting setup-token flow");
 
     // PTY interaction is blocking; drive it off the async runtime
     let (flow, auth_url) = tokio::task::spawn_blocking(|| {
@@ -328,14 +334,18 @@ pub async fn claude_auth_start(
     })
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("Login task panicked: {e}")))?
-    .map_err(ApiError::Internal)?;
+    .map_err(|e| {
+        tracing::error!("Claude login: start failed: {e:#}");
+        ApiError::Internal(e)
+    })?;
 
     // Replacing any previous in-flight flow cancels it (Drop kills the child)
     *state
         .claude_login
         .lock()
-        .expect("claude_login mutex poisoned") = Some(flow);
+        .expect("claude_login mutex poisoned") = Some((flow, std::time::Instant::now()));
 
+    tracing::info!("Claude login: auth URL extracted, awaiting code paste");
     Ok(Json(ClaudeAuthStartResponse { auth_url }))
 }
 
@@ -343,26 +353,61 @@ pub async fn claude_auth_complete(
     State(state): State<AppState>,
     Json(req): Json<ClaudeAuthCompleteRequest>,
 ) -> ApiResult<Json<ClaudeAuthStatusResponse>> {
-    let flow = state
+    let (flow, started) = state
         .claude_login
         .lock()
         .expect("claude_login mutex poisoned")
         .take()
         .ok_or_else(|| {
-            ApiError::BadRequest("No Claude login in progress - start one first".to_string())
+            ApiError::Gone("No Claude login in progress - start one first".to_string())
         })?;
 
+    if started.elapsed() > LOGIN_FLOW_TTL {
+        // Dropping the flow kills the PTY child
+        tracing::info!("Claude login: flow expired before code arrived");
+        return Err(ApiError::Gone(
+            "Login expired - start a new one".to_string(),
+        ));
+    }
+
     let code = req.code.trim().to_string();
-    let outcome = tokio::task::spawn_blocking(move || {
+    tracing::info!("Claude login: code received, submitting to CLI");
+
+    // Outcome-driven wait: returns on minted token or CLI OAuth error, not on
+    // process exit (the CLI never exits on a rejected code)
+    let result = tokio::task::spawn_blocking(move || {
         let mut flow = flow;
-        flow.submit_code(&code)
-            .map_err(|e| anyhow::anyhow!("Submitting code failed: {e}"))?;
-        flow.finish(std::time::Duration::from_secs(60))
-            .map_err(|e| anyhow::anyhow!("Login did not complete: {e}"))
+        let outcome = flow.submit_code_and_wait(&code, std::time::Duration::from_secs(30));
+        (flow, outcome)
     })
     .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("Login task panicked: {e}")))?
-    .map_err(ApiError::Internal)?;
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("Login task panicked: {e}")))?;
+
+    let (flow, outcome) = result;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(claude_codes::Error::CodeRejected { message }) => {
+            // The CLI is alive awaiting a retry against the same PKCE
+            // verifier; put the flow back so a corrected paste reaches it
+            tracing::warn!("Claude login: code rejected by CLI: {message}");
+            *state
+                .claude_login
+                .lock()
+                .expect("claude_login mutex poisoned") = Some((flow, started));
+            return Err(ApiError::BadRequest(format!(
+                "Code rejected: {message} - check the paste and try again"
+            )));
+        }
+        Err(e) => {
+            // Fatal: dropping the flow kills the child; UI restarts the flow
+            tracing::error!("Claude login: failed: {e}");
+            drop(flow);
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "Login did not complete: {e}"
+            )));
+        }
+    };
+    drop(flow); // success: reap the CLI child
 
     let token = outcome.token.ok_or_else(|| {
         let tail: String = outcome
@@ -383,7 +428,7 @@ pub async fn claude_auth_complete(
     crate::db::claude_credentials::upsert(&mut conn, &token).await?;
     let cred = crate::db::claude_credentials::get(&mut conn).await?;
 
-    tracing::info!("Claude Code credential stored via in-app login");
+    tracing::info!("Claude login: credential minted and stored");
 
     Ok(Json(ClaudeAuthStatusResponse {
         connected: true,

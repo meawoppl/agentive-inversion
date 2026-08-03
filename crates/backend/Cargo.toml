@@ -47,7 +47,7 @@ async-trait = "0.1.89"
 jsonwebtoken = "9"
 cookie = "0.18"
 google-calendar3 = "6.0.0"
-claude-codes = { git = "https://github.com/meawoppl/rust-code-agent-sdks", rev = "a7ab9b5110cef43d937d7e850dbda23a787484f7", features = ["auth"] }
+claude-codes = { git = "https://github.com/meawoppl/rust-code-agent-sdks", rev = "0c0ee80fd1c3a25132a1a37766c86d5e89d6f218", features = ["auth", "log"] }
 tempfile = "3.27.0"
 
 # Pre-compressed static frontend assets (brotli/gzip, ETag/304, SPA fallback).
@@ -57,6 +57,7 @@ memory-serve = "0.6"
 # with brotli-decompressor 4.0.3 (still on alloc-no-stdlib 2.x) inside
 # memory-serve's brotli 6. Holding 0.2.2 keeps the graph on one version.
 alloc-stdlib = "=0.2.2"
+tracing-log = "0.2.0"
 
 [dev-dependencies]
 tokio-test = "0.4"

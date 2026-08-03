@@ -201,6 +201,11 @@ fn account_status() -> Html {
         Callback::from(move |_| expanded.set(!*expanded))
     };
 
+    let collapse = {
+        let expanded = expanded.clone();
+        Callback::from(move |_| expanded.set(false))
+    };
+
     let total_accounts = accounts.len();
     let error_count = accounts
         .iter()
@@ -222,6 +227,10 @@ fn account_status() -> Html {
             {if *expanded {
                 let account_list = (*accounts).clone();
                 html! {
+                    <>
+                    // Invisible full-screen layer under the dropdown: a click
+                    // anywhere outside it dismisses the popover
+                    <div class="popover-backdrop" onclick={collapse}></div>
                     <div class="account-status-dropdown">
                         <div class="account-section">
                             <div class="account-section-header">
@@ -275,6 +284,7 @@ fn account_status() -> Html {
                             }}
                         </div>
                     </div>
+                    </>
                 }
             } else {
                 html! {}

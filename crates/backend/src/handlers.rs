@@ -446,6 +446,13 @@ pub async fn claude_auth_complete(
     };
     drop(flow); // success: reap the CLI child
 
+    tracing::info!(
+        "Claude login: outcome channels: token_source={:?} osc52={:?} copy_nudge_sent={}",
+        outcome.token_source,
+        outcome.osc52,
+        outcome.copy_nudge_sent
+    );
+
     let token = match (outcome.token, outcome.credentials_updated) {
         (Some(token), _) => token,
         (None, true) => {
@@ -457,7 +464,8 @@ pub async fn claude_auth_complete(
             // requires re-login.
             tracing::warn!(
                 "Claude login: succeeded via CLI-persisted credentials (token not \
-                 capturable); re-login will be needed after container redeploys"
+                 capturable; osc52={:?}); re-login will be needed after container redeploys",
+                outcome.osc52
             );
             String::new()
         }

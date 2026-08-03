@@ -464,7 +464,8 @@ pub async fn claude_auth_complete(
             // requires re-login.
             tracing::warn!(
                 "Claude login: succeeded via CLI-persisted credentials (token not \
-                 capturable; osc52={:?}); re-login will be needed after container redeploys",
+                 capturable; osc52={:?}); credentials persist only as durably as \
+                 ~/.claude does (persisted via volume on this deployment)",
                 outcome.osc52
             );
             String::new()

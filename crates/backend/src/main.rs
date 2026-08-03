@@ -209,6 +209,14 @@ async fn main() -> anyhow::Result<()> {
 
     dotenvy::dotenv().ok();
 
+    // Build provenance: which claude-codes rev this binary actually contains.
+    // Deploy gates read this line instead of grepping the binary, which can
+    // false-negative on optimized-out literals.
+    tracing::info!(
+        "Build provenance: claude-codes rev {}",
+        env!("CLAUDE_CODES_REV")
+    );
+
     let config = Config::from_env();
 
     // Migrations are embedded in the binary and applied before anything else

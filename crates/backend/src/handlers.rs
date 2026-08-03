@@ -370,14 +370,40 @@ pub async fn claude_auth_complete(
         ));
     }
 
-    let code = req.code.trim().to_string();
-    tracing::info!("Claude login: code received, submitting to CLI");
+    // Browser copies inject invisible unicode that trim() does not touch;
+    // an empty or poisoned code presses Enter on a bad field and presents as
+    // a silent timeout. Sanitize before spending a flow attempt.
+    let code: String = req
+        .code
+        .chars()
+        .filter(|c| {
+            !c.is_whitespace()
+                && !matches!(
+                    c,
+                    '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{00A0}'
+                )
+        })
+        .collect();
+    if code.is_empty() {
+        // Flow stays stored: nothing was submitted, so the session is intact
+        *state
+            .claude_login
+            .lock()
+            .expect("claude_login mutex poisoned") = Some((flow, started));
+        return Err(ApiError::BadRequest(
+            "Pasted code is empty after removing whitespace - copy it again".to_string(),
+        ));
+    }
+    tracing::info!(
+        "Claude login: code received (len={}), submitting to CLI",
+        code.len()
+    );
 
     // Outcome-driven wait: returns on minted token or CLI OAuth error, not on
     // process exit (the CLI never exits on a rejected code)
     let result = tokio::task::spawn_blocking(move || {
         let mut flow = flow;
-        let outcome = flow.submit_code_and_wait(&code, std::time::Duration::from_secs(30));
+        let outcome = flow.submit_code_and_wait(&code, std::time::Duration::from_secs(90));
         (flow, outcome)
     })
     .await
@@ -398,6 +424,17 @@ pub async fn claude_auth_complete(
                 "Code rejected: {message} - check the paste and try again"
             )));
         }
+        Err(claude_codes::Error::LoginTimeout { transcript }) => {
+            // The transcript leads with the channel diagnostics line
+            // ([channels: screen=... osc52=... credentials=...]), which names
+            // the stalled leg instead of leaving a silent mystery
+            tracing::error!("Claude login: timed out; transcript: {transcript}");
+            drop(flow);
+            let tail: String = transcript.chars().take(400).collect();
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "Login timed out. CLI state: {tail}"
+            )));
+        }
         Err(e) => {
             // Fatal: dropping the flow kills the child; UI restarts the flow
             tracing::error!("Claude login: failed: {e}");
@@ -409,20 +446,44 @@ pub async fn claude_auth_complete(
     };
     drop(flow); // success: reap the CLI child
 
-    let token = outcome.token.ok_or_else(|| {
-        let tail: String = outcome
-            .transcript
-            .chars()
-            .rev()
-            .take(300)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        ApiError::Internal(anyhow::anyhow!(
-            "Login finished without minting a token. CLI output ended with: {tail}"
-        ))
-    })?;
+    tracing::info!(
+        "Claude login: outcome channels: token_source={:?} osc52={:?} copy_nudge_sent={}",
+        outcome.token_source,
+        outcome.osc52,
+        outcome.copy_nudge_sent
+    );
+
+    let token = match (outcome.token, outcome.credentials_updated) {
+        (Some(token), _) => token,
+        (None, true) => {
+            // Legitimate success: the CLI accepted the code and persisted its
+            // own credentials, but never exposed the token over the PTY.
+            // Store the cli-persisted sentinel (empty token): the pipeline
+            // then relies on the CLI's disk credentials instead of an env
+            // token. Those live only inside the container, so a redeploy
+            // requires re-login.
+            tracing::warn!(
+                "Claude login: succeeded via CLI-persisted credentials (token not \
+                 capturable; osc52={:?}); re-login will be needed after container redeploys",
+                outcome.osc52
+            );
+            String::new()
+        }
+        (None, false) => {
+            let tail: String = outcome
+                .transcript
+                .chars()
+                .rev()
+                .take(300)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "Login finished without minting a token. CLI output ended with: {tail}"
+            )));
+        }
+    };
 
     let mut conn = get_conn(&state.pool).await?;
     crate::db::claude_credentials::upsert(&mut conn, &token).await?;

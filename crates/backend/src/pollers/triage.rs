@@ -233,6 +233,10 @@ pub async fn start_triage_task(pool: DbPool, auth_config: Arc<AuthConfig>, healt
 pub enum TriageCredential {
     /// Claude Code OAuth token from the in-app login (subscription auth)
     OAuthToken(String),
+    /// In-app login succeeded but the token wasn't capturable; the CLI
+    /// persisted its own credentials inside the container, so sessions
+    /// authenticate from disk with no env override
+    CliPersisted,
     /// ANTHROPIC_API_KEY inherited from the environment
     ApiKeyEnv,
 }
@@ -241,6 +245,7 @@ impl TriageCredential {
     fn source_name(&self) -> &'static str {
         match self {
             TriageCredential::OAuthToken(_) => "claude-code-login",
+            TriageCredential::CliPersisted => "claude-cli-persisted",
             TriageCredential::ApiKeyEnv => "api-key-env",
         }
     }
@@ -261,6 +266,12 @@ async fn detect_mode(pool: &DbPool) -> Result<TriageCredential, String> {
 
     if let Ok(mut conn) = pool.get().await {
         if let Ok(Some(cred)) = db::claude_credentials::get(&mut conn).await {
+            // Empty token = cli-persisted sentinel: the login succeeded but
+            // the token wasn't capturable; sessions use the CLI's own disk
+            // credentials (container-lifetime only)
+            if cred.oauth_token.is_empty() {
+                return Ok(TriageCredential::CliPersisted);
+            }
             return Ok(TriageCredential::OAuthToken(cred.oauth_token));
         }
     }

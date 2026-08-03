@@ -47,7 +47,7 @@ async-trait = "0.1.89"
 jsonwebtoken = "9"
 cookie = "0.18"
 google-calendar3 = "6.0.0"
-claude-codes = { git = "https://github.com/meawoppl/rust-code-agent-sdks", rev = "1b1749f726112320143128879850ce03621e3884", features = ["auth"] }
+claude-codes = { git = "https://github.com/meawoppl/rust-code-agent-sdks", rev = "a7ab9b5110cef43d937d7e850dbda23a787484f7", features = ["auth"] }
 tempfile = "3.27.0"
 
 # Pre-compressed static frontend assets (brotli/gzip, ETag/304, SPA fallback).

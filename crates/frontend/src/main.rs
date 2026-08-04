@@ -2936,6 +2936,13 @@ fn archive_review_panel() -> Html {
                                 {for bundle.items.iter().map(|item| {
                                     let keep = on_keep.clone();
                                     let decision_id = item.decision_id;
+                                    // Hover preview: enough of the message to
+                                    // resolve an uncertain call without
+                                    // leaving the accept flow
+                                    let preview = item
+                                        .body_preview
+                                        .clone()
+                                        .or_else(|| item.snippet.clone());
                                     html! {
                                         <div class="review-item-row" key={item.decision_id.to_string()}>
                                             <div class="review-item-main">
@@ -2946,6 +2953,20 @@ fn archive_review_panel() -> Html {
                                                 <span class="review-item-reason" title={item.reasoning.clone()}>
                                                     {&item.reasoning}
                                                 </span>
+                                                {if let Some(preview) = preview {
+                                                    html! {
+                                                        <div class="review-tooltip">
+                                                            <div class="review-tooltip-header">
+                                                                <span>{&item.from_address}</span>
+                                                                <span>{item.received_at.format("%Y-%m-%d %H:%M").to_string()}</span>
+                                                            </div>
+                                                            <div class="review-tooltip-subject">{&item.subject}</div>
+                                                            <div class="review-tooltip-body">{preview}</div>
+                                                        </div>
+                                                    }
+                                                } else {
+                                                    html! {}
+                                                }}
                                             </div>
                                             <span class="review-item-date">
                                                 {item.received_at.format("%Y-%m-%d").to_string()}

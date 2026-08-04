@@ -543,6 +543,11 @@ pub async fn get_archive_review(
                 from_name: email.from_name.clone(),
                 received_at: email.received_at,
                 snippet: email.snippet.clone(),
+                body_preview: email.body_text.as_ref().map(|b| {
+                    // Char-boundary-safe truncation; bodies can be huge and
+                    // 500 items ship in one response
+                    b.chars().take(1200).collect()
+                }),
             })
         })
         .collect();

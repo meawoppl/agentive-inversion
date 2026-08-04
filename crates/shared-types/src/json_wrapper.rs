@@ -22,15 +22,15 @@ use std::ops::{Deref, DerefMut};
 /// # Example
 ///
 /// ```ignore
-/// use shared_types::{JsonWrapper, RuleConditions};
+/// use shared_types::{JsonWrapper, ProposedTodoAction};
 ///
 /// // In a database model:
-/// pub struct AgentRule {
-///     pub conditions: JsonWrapper<RuleConditions>,
+/// pub struct AgentDecisionRow {
+///     pub proposed_action: JsonWrapper<ProposedTodoAction>,
 /// }
 ///
 /// // The wrapper transparently serializes/deserializes
-/// let conditions = JsonWrapper::new(RuleConditions { ... });
+/// let action = JsonWrapper::new(ProposedTodoAction { ... });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AsExpression, FromSqlRow)]
 #[serde(transparent)]

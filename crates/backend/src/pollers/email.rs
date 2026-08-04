@@ -4,7 +4,6 @@
 //! periodically fetching new emails from configured Gmail accounts.
 
 use super::gmail_client::{EmailMessage, GmailClient};
-use super::processor;
 use crate::db::{self, DbPool};
 use crate::models::NewEmail;
 use anyhow::{Context, Result};
@@ -23,8 +22,6 @@ pub struct EmailPollerConfig {
     pub rate_limit_secs: u64,
     /// Maximum emails to fetch per poll
     pub max_fetch_per_poll: u32,
-    /// Maximum unprocessed emails to process per cycle
-    pub max_process_per_cycle: i64,
 }
 
 impl Default for EmailPollerConfig {
@@ -33,7 +30,6 @@ impl Default for EmailPollerConfig {
             poll_interval: Duration::from_secs(300), // 5 minutes
             rate_limit_secs: 60,                     // 1 minute minimum between polls
             max_fetch_per_poll: 50,
-            max_process_per_cycle: 100,
         }
     }
 }
@@ -56,16 +52,10 @@ impl EmailPollerConfig {
             .and_then(|s| s.parse().ok())
             .unwrap_or(50);
 
-        let max_process_per_cycle = std::env::var("EMAIL_MAX_PROCESS_PER_CYCLE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(100);
-
         Self {
             poll_interval: Duration::from_secs(poll_interval_secs),
             rate_limit_secs,
             max_fetch_per_poll,
-            max_process_per_cycle,
         }
     }
 }
@@ -106,7 +96,7 @@ struct AccountState {
 }
 
 /// Start the email polling background task
-pub async fn start_email_polling_task(pool: DbPool, triage_health: super::TriageHealth) {
+pub async fn start_email_polling_task(pool: DbPool) {
     let config = EmailPollerConfig::from_env();
 
     tracing::info!(
@@ -119,14 +109,7 @@ pub async fn start_email_polling_task(pool: DbPool, triage_health: super::Triage
     let mut account_states: HashMap<Uuid, AccountState> = HashMap::new();
 
     loop {
-        if let Err(e) = run_poll_cycle(
-            &pool,
-            &config,
-            &mut rate_limiter,
-            &mut account_states,
-            &triage_health,
-        )
-        .await
+        if let Err(e) = run_poll_cycle(&pool, &config, &mut rate_limiter, &mut account_states).await
         {
             tracing::error!("Email poll cycle failed: {}", e);
         }
@@ -140,7 +123,6 @@ async fn run_poll_cycle(
     config: &EmailPollerConfig,
     rate_limiter: &mut RateLimiter,
     account_states: &mut HashMap<Uuid, AccountState>,
-    triage_health: &super::TriageHealth,
 ) -> Result<()> {
     let mut conn = pool.get().await.context("Failed to get DB connection")?;
 
@@ -213,29 +195,6 @@ async fn run_poll_cycle(
                     );
                 }
             }
-        }
-    }
-
-    // Keyword-heuristic fallback: only when the agentic pipeline is disabled.
-    // With triage active, classification happens in the triage task instead.
-    if triage_health.read().await.mode == "agentic" {
-        return Ok(());
-    }
-    match processor::process_pending_emails(pool, config.max_process_per_cycle).await {
-        Ok(stats) => {
-            if stats.processed > 0 {
-                tracing::info!(
-                    "Processed {} emails: {} rule matched, {} heuristic proposed, {} ignored, {} errors",
-                    stats.processed,
-                    stats.rule_matched,
-                    stats.heuristic_proposed,
-                    stats.ignored,
-                    stats.errors
-                );
-            }
-        }
-        Err(e) => {
-            tracing::error!("Failed to process pending emails: {}", e);
         }
     }
 

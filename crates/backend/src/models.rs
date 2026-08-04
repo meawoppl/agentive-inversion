@@ -19,7 +19,6 @@ pub struct AgentDecisionRow {
     pub reasoning_details: Option<String>, // JSON stored as TEXT
     pub confidence: f32,
     pub status: String,
-    pub applied_rule_id: Option<Uuid>,
     pub result_todo_id: Option<Uuid>,
     pub user_feedback: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -40,7 +39,6 @@ impl From<AgentDecisionRow> for shared_types::AgentDecision {
             reasoning_details: row.reasoning_details,
             confidence: row.confidence,
             status: row.status,
-            applied_rule_id: row.applied_rule_id,
             result_todo_id: row.result_todo_id,
             user_feedback: row.user_feedback,
             created_at: row.created_at,
@@ -81,21 +79,5 @@ pub struct TodoChanges {
     pub due_date: Option<Option<DateTime<Utc>>>,
     pub link: Option<Option<String>>,
     pub category_id: Option<Option<Uuid>>,
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
-/// Changeset for updating agent rules in a single query
-#[derive(Debug, Clone, Default, AsChangeset)]
-#[diesel(table_name = crate::schema::agent_rules)]
-pub struct AgentRuleChanges {
-    pub name: Option<String>,
-    pub description: Option<Option<String>>,
-    pub source_type: Option<String>,
-    pub rule_type: Option<String>,
-    pub conditions: Option<String>,
-    pub action: Option<String>,
-    pub action_params: Option<Option<String>>,
-    pub priority: Option<i32>,
-    pub is_active: Option<bool>,
     pub updated_at: Option<DateTime<Utc>>,
 }

@@ -95,16 +95,6 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
             "/decisions/batch/reject",
             post(handlers::batch_reject_decisions),
         )
-        // Agent rules routes
-        .route("/rules", get(handlers::list_agent_rules))
-        .route("/rules", post(handlers::create_agent_rule))
-        .route("/rules/:id", get(handlers::get_agent_rule))
-        .route("/rules/:id", put(handlers::update_agent_rule))
-        .route("/rules/:id", delete(handlers::delete_agent_rule))
-        .route(
-            "/rules/:id/toggle",
-            post(handlers::toggle_agent_rule_active),
-        )
         // Triage pipeline routes (agent-cli + pipeline screen)
         .route("/triage/decisions", post(handlers::post_triage_decision))
         .route("/pipeline/stats", get(handlers::get_pipeline_stats))
@@ -300,9 +290,8 @@ async fn main() -> anyhow::Result<()> {
     if !args.dev_mode {
         // Start email polling background task (ingestion is never gated on triage)
         let email_poll_pool = pool.clone();
-        let email_poll_health = triage_health.clone();
         tokio::spawn(async move {
-            pollers::start_email_polling_task(email_poll_pool, email_poll_health).await;
+            pollers::start_email_polling_task(email_poll_pool).await;
         });
 
         // Start the agentic triage pipeline task

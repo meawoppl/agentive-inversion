@@ -19,13 +19,15 @@ Responsibilities:
 **Port**: 3000
 
 Responsibilities:
-- REST API under `/api` (todos, emails, decisions, rules, categories,
+- REST API under `/api` (todos, emails, decisions, categories,
   calendar events, chat, google accounts)
 - Google OAuth login with JWT cookie sessions and an email allowlist
 - Serving the built frontend as static files (SPA fallback)
 - **Email poller** (tokio background task): polls Gmail for every connected
-  account, stores emails, classifies them via agent rules plus a keyword
-  heuristic, and creates pending decisions
+  account (incremental sync plus indefinite history backfill) and stores emails
+- **Triage pipeline** (tokio background task): classifies pending emails via
+  Claude Code sessions (Haiku screening, Sonnet archive determinations, Opus
+  action pass), creating decisions through the agent-cli REST path
 - **Calendar poller** (tokio background task): currently a stub
 
 ### 3. Shared Types
@@ -34,9 +36,8 @@ Responsibilities:
 
 Responsibilities:
 - Domain models: todos, google accounts, emails, calendar events,
-  agent decisions, agent rules, chat messages
+  agent decisions, chat messages
 - API request/response types
-- The rule engine used for email classification
 
 ## Data Flow
 
@@ -49,8 +50,8 @@ Responsibilities:
 ┌───────────────────────────────┐
 │  Backend (Axum)               │
 │  ├── email poller task        │──► emails table
-│  ├── classifier (rules +      │──► agent_decisions (pending)
-│  │    keyword heuristic)      │
+│  ├── triage pipeline (Claude  │──► agent_decisions (pending)
+│  │    Code agent sessions)    │
 │  └── REST API ◄───────────────┼──── Frontend (Yew)
 └──────────────┬────────────────┘        │
                v                         │ approve/reject
@@ -76,8 +77,6 @@ Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
 - **categories** — id, name (unique), color
 - **agent_decisions** — proposed actions with reasoning, confidence, and
   status (proposed / approved / rejected / auto_approved / executed)
-- **agent_rules** — user-defined classification rules (conditions as JSON
-  text, action, priority, match tracking)
 - **chat_messages** — chat widget history
 
 ## Authentication

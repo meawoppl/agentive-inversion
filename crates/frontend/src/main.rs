@@ -5,8 +5,8 @@ use shared_types::{
     BatchRejectDecisionsRequest, CalendarEventResponse, Category, ChatMessageResponse,
     ChatResponse, ClaudeAuthStatusResponse, CreateTodoRequest, DecisionStats, EmailResponse,
     GoogleAccountResponse, LoginInitResponse, PipelineStatsResponse, ProposedCalendarEventAction,
-    ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest, SuggestedAction, Todo,
-    UpdateAboutMeRequest, UpdateTodoRequest,
+    ProposedForwardAction, ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest,
+    SuggestedAction, Todo, UpdateAboutMeRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 use web_sys::{Element, HtmlInputElement};
@@ -1071,6 +1071,12 @@ fn decision_detail_view(props: &DecisionDetailProps) -> Html {
         } else {
             None
         };
+    let proposed_forward: Option<ProposedForwardAction> =
+        if decision.decision_type == "forward_email" {
+            serde_json::from_value(decision.proposed_action.clone()).ok()
+        } else {
+            None
+        };
 
     html! {
         <div class="decision-detail">
@@ -1118,6 +1124,20 @@ fn decision_detail_view(props: &DecisionDetailProps) -> Html {
                             html! {}
                         }}
                         <p class="gate-note">{"Approving creates this event on your Agent calendar."}</p>
+                    </div>
+                }
+            } else {
+                html! {}
+            }}
+
+            {if let Some(fwd) = proposed_forward {
+                html! {
+                    <div class="detail-section">
+                        <h4>{"Proposed Forward"}</h4>
+                        <p><strong>{"Subject: "}</strong>{&fwd.subject}</p>
+                        <p><strong>{"From account: "}</strong>{&fwd.from_account}</p>
+                        <p><strong>{"To: "}</strong>{&fwd.to_address}</p>
+                        <p class="gate-note">{"Approving forwards the original email (with attachments) to this address, then labels it agent-forwarded and archives it."}</p>
                     </div>
                 }
             } else {
@@ -2606,10 +2626,56 @@ const RETURNED_BUNDLE_COOLDOWN_MS: u32 = 4_000;
 struct ReviewBundle {
     key: usize,
     items: Vec<ArchiveReviewItem>,
+    /// Sender shared by every item, when the bundle is a per-sender group —
+    /// scanning one name clears the whole category
+    sender: Option<String>,
     /// Came back after a failed accept
     returned: bool,
     /// Server error from the failed accept, shown on the card
     error: Option<String>,
+}
+
+/// Group proposals by sender: senders with multiple proposals get their own
+/// bundle (largest first — one click clears a whole newsletter), and
+/// one-off senders pool into assorted bundles of [`REVIEW_BUNDLE_SIZE`].
+fn bundle_by_sender(items: Vec<ArchiveReviewItem>) -> Vec<ReviewBundle> {
+    let mut by_sender: std::collections::HashMap<String, Vec<ArchiveReviewItem>> =
+        std::collections::HashMap::new();
+    for item in items {
+        by_sender
+            .entry(item.from_address.clone())
+            .or_default()
+            .push(item);
+    }
+
+    let mut groups: Vec<(String, Vec<ArchiveReviewItem>)> = by_sender.into_iter().collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+
+    let mut bundles = Vec::new();
+    let mut singles: Vec<ArchiveReviewItem> = Vec::new();
+    for (sender, group) in groups {
+        if group.len() == 1 {
+            singles.extend(group);
+        } else {
+            bundles.push(ReviewBundle {
+                key: next_bundle_key(),
+                items: group,
+                sender: Some(sender),
+                returned: false,
+                error: None,
+            });
+        }
+    }
+    for chunk in singles.chunks(REVIEW_BUNDLE_SIZE) {
+        bundles.push(ReviewBundle {
+            key: next_bundle_key(),
+            items: chunk.to_vec(),
+            sender: None,
+            returned: false,
+            error: None,
+        });
+    }
+    bundles
 }
 
 #[derive(PartialEq, Default)]
@@ -2682,9 +2748,14 @@ impl Reducible for ReviewQueue {
                     "{} email(s) couldn't be archived - returned to the back of the queue",
                     items.len()
                 ));
+                let sender = items
+                    .first()
+                    .map(|i| i.from_address.clone())
+                    .filter(|s| items.iter().all(|i| &i.from_address == s));
                 next.bundles.push(ReviewBundle {
                     key,
                     items,
+                    sender,
                     returned: true,
                     error: Some(error),
                 });
@@ -2728,19 +2799,9 @@ fn archive_review_panel() -> Html {
                 match Request::get("/api/pipeline/archive-review").send().await {
                     Ok(resp) if resp.ok() => match resp.json::<ArchiveReviewResponse>().await {
                         Ok(data) => {
-                            let bundles = data
-                                .items
-                                .chunks(REVIEW_BUNDLE_SIZE)
-                                .map(|chunk| ReviewBundle {
-                                    key: next_bundle_key(),
-                                    items: chunk.to_vec(),
-                                    returned: false,
-                                    error: None,
-                                })
-                                .collect();
                             queue.dispatch(ReviewMsg::Loaded {
                                 mode: data.archive_mode,
-                                bundles,
+                                bundles: bundle_by_sender(data.items),
                             });
                         }
                         Err(e) => {
@@ -2917,6 +2978,19 @@ fn archive_review_panel() -> Html {
                                 </span>
                             </div>
                             <div class={if bundle.returned { "review-bundle-card bundle-returned" } else { "review-bundle-card" }}>
+                                <div class="bundle-sender-header">
+                                    {match &bundle.sender {
+                                        Some(s) => html! {
+                                            <>
+                                                <span class="bundle-sender-name">{s}</span>
+                                                <span class="bundle-sender-count">{format!("{} emails from this sender", bundle.items.len())}</span>
+                                            </>
+                                        },
+                                        None => html! {
+                                            <span class="bundle-sender-count">{format!("{} assorted senders", bundle.items.len())}</span>
+                                        },
+                                    }}
+                                </div>
                                 {if let Some(err) = bundle.error.clone() {
                                     html! {
                                         <div class="bundle-error-note">
@@ -3030,6 +3104,8 @@ fn pipeline_view() -> Html {
         ("archive_candidate", "Awaiting archive determination"),
         ("archived", "Archived by agent"),
         ("event_proposed", "Calendar events proposed"),
+        ("forward_proposed", "Forwards proposed"),
+        ("forwarded", "Forwarded"),
         ("action_queued", "Queued for action pass"),
         ("todo_proposed", "Todos proposed"),
         ("kept", "Kept in inbox"),

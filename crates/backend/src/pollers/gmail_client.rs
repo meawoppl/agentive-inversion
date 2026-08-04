@@ -214,6 +214,74 @@ impl GmailClient {
         Ok(Self::parse_message(message))
     }
 
+    /// Forward a message as an RFC 822 attachment from this account. Gmail
+    /// has no forward endpoint, so this fetches the original raw message and
+    /// sends a new one carrying it whole — headers, body, and attachments
+    /// survive intact, which is what expense-ingestion inboxes parse.
+    pub async fn forward_as_attachment(
+        &self,
+        message_id: &str,
+        to_address: &str,
+        from_address: &str,
+        original_subject: &str,
+    ) -> Result<()> {
+        let (_, original) = self
+            .hub
+            .users()
+            .messages_get("me", message_id)
+            .format("raw")
+            .doit()
+            .await
+            .context("Failed to fetch raw message for forwarding")?;
+        let raw = original
+            .raw
+            .context("Gmail returned no raw payload for message")?;
+
+        // Header values must not smuggle CRLFs into the envelope
+        let subject: String = original_subject
+            .chars()
+            .filter(|c| *c != '\r' && *c != '\n')
+            .collect();
+
+        let boundary = format!("fwd-{message_id}");
+        let mut mime: Vec<u8> = Vec::with_capacity(raw.len() + 512);
+        mime.extend_from_slice(
+            format!(
+                "From: {from_address}\r\n\
+                 To: {to_address}\r\n\
+                 Subject: Fwd: {subject}\r\n\
+                 MIME-Version: 1.0\r\n\
+                 Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\
+                 \r\n\
+                 --{boundary}\r\n\
+                 Content-Type: text/plain; charset=utf-8\r\n\
+                 \r\n\
+                 Forwarded receipt.\r\n\
+                 \r\n\
+                 --{boundary}\r\n\
+                 Content-Type: message/rfc822\r\n\
+                 Content-Disposition: attachment; filename=\"original.eml\"\r\n\
+                 \r\n"
+            )
+            .as_bytes(),
+        );
+        mime.extend_from_slice(&raw);
+        mime.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        self.hub
+            .users()
+            .messages_send(google_gmail1::api::Message::default(), "me")
+            .upload(
+                std::io::Cursor::new(mime),
+                "message/rfc822".parse().expect("static mime type"),
+            )
+            .await
+            .context("Failed to send forwarded message")?;
+
+        tracing::info!("Forwarded message {} to {}", message_id, to_address);
+        Ok(())
+    }
+
     /// Archive a message (remove INBOX label)
     #[allow(dead_code)]
     pub async fn archive_message(&self, message_id: &str) -> Result<()> {

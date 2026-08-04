@@ -664,6 +664,12 @@ async fn execute_approved_side_effect(
                 .map_err(ApiError::Internal)?;
             Ok(true)
         }
+        "forward_email" => {
+            crate::services::TriageService::execute_forward_decision(&state.pool, decision_id)
+                .await
+                .map_err(ApiError::Internal)?;
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }

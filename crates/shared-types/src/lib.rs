@@ -302,6 +302,16 @@ pub struct CreateCalendarEventResponse {
 }
 
 /// Calendar event proposed by the triage agent (stored as a gated decision's
+/// The action payload of a forward_email decision (stored as JSON in
+/// proposed_action; executed on approval). The destination comes from server
+/// config, never from the agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProposedForwardAction {
+    pub to_address: String,
+    pub from_account: String,
+    pub subject: String,
+}
+
 /// proposed_action; executed on approval)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProposedCalendarEventAction {
@@ -344,6 +354,9 @@ pub enum TriageDecideAction {
     Ignore,
     /// Send to the action queue for the deeper (Opus) pass
     QueueAction,
+    /// Propose forwarding this email (e.g. a receipt to the expense system).
+    /// The destination is server policy, never agent-chosen.
+    Forward,
 }
 
 /// Request body for POST /api/triage/decisions (sent by agent-cli)
@@ -483,6 +496,7 @@ pub enum DecisionType {
     Categorize,
     SetDueDate,
     CreateCalendarEvent,
+    ForwardEmail,
 }
 
 impl DecisionType {
@@ -495,6 +509,7 @@ impl DecisionType {
             DecisionType::Categorize => "categorize",
             DecisionType::SetDueDate => "set_due_date",
             DecisionType::CreateCalendarEvent => "create_calendar_event",
+            DecisionType::ForwardEmail => "forward_email",
         }
     }
 
@@ -507,6 +522,7 @@ impl DecisionType {
             "categorize" => Some(DecisionType::Categorize),
             "set_due_date" => Some(DecisionType::SetDueDate),
             "create_calendar_event" => Some(DecisionType::CreateCalendarEvent),
+            "forward_email" => Some(DecisionType::ForwardEmail),
             _ => None,
         }
     }
@@ -886,6 +902,26 @@ mod triage_type_tests {
         )
         .unwrap();
         assert!(matches!(parsed, TriageDecideAction::Todo { .. }));
+
+        let json = serde_json::to_value(&TriageDecideAction::Forward).unwrap();
+        assert_eq!(json["type"], "forward");
+    }
+
+    #[test]
+    fn forward_decision_type_round_trips() {
+        assert_eq!(DecisionType::ForwardEmail.as_str(), "forward_email");
+        assert_eq!(
+            DecisionType::parse("forward_email"),
+            Some(DecisionType::ForwardEmail)
+        );
+        let action = ProposedForwardAction {
+            to_address: "receipts@ramp.com".to_string(),
+            from_account: "user@example.com".to_string(),
+            subject: "Your receipt".to_string(),
+        };
+        let parsed: ProposedForwardAction =
+            serde_json::from_str(&serde_json::to_string(&action).unwrap()).unwrap();
+        assert_eq!(parsed, action);
     }
 
     #[test]
@@ -975,6 +1011,8 @@ mod serde_roundtrip_tests {
             DecisionType::Defer,
             DecisionType::Categorize,
             DecisionType::SetDueDate,
+            DecisionType::CreateCalendarEvent,
+            DecisionType::ForwardEmail,
         ] {
             assert_eq!(roundtrip(&value), value);
             assert_eq!(DecisionType::parse(value.as_str()), Some(value.clone()));

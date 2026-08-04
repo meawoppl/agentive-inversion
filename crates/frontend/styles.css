@@ -2329,3 +2329,24 @@ main {
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* Sender-group header on review bundles: the category label you scan
+   before hitting accept */
+.bundle-sender-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 0 6px;
+    border-bottom: 2px solid #ecf0f1;
+}
+
+.bundle-sender-name {
+    font-weight: 700;
+    font-size: 15px;
+    color: #2c3e50;
+}
+
+.bundle-sender-count {
+    font-size: 12px;
+    color: #7f8c8d;
+}

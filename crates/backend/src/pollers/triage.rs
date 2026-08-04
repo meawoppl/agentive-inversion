@@ -101,6 +101,13 @@ For EVERY email in the file, make exactly one disposition by running the
 agent-cli command via Bash. Do not skip any email. Do not take any other action.
 
 Dispositions:
+- Purchase receipt, paid invoice, or order confirmation showing an amount the
+  user paid (business or personal spend the expense system should capture):
+  agent-cli decide forward --email-id <id> --reasoning "<why>"
+  This proposes forwarding it to the user's expense inbox; the user approves
+  before anything sends. Check this BEFORE the archive-candidate rule —
+  receipts look like automated mail but must not be lost to the archive.
+  Not receipts: payment reminders, unpaid invoices, marketing about spending.
 - Newsletter, promotion, notification, or automated mail with no action needed:
   agent-cli decide archive-candidate --email-id <id> --reasoning "<why>"
 - Contains a real-world event with a concrete date/time the user could attend

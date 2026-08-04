@@ -105,6 +105,43 @@ impl GmailClient {
         Ok(emails)
     }
 
+    /// Fetch inbox messages received strictly before the given epoch second
+    /// (history backfill). Gmail's `before:` operator matches on internal
+    /// date and returns newest-first, so repeated calls with a descending
+    /// cursor walk the inbox history backwards until exhausted.
+    pub async fn fetch_messages_before(
+        &self,
+        before_epoch_secs: i64,
+        max_results: u32,
+    ) -> Result<Vec<EmailMessage>> {
+        let (_, list_response) = self
+            .hub
+            .users()
+            .messages_list("me")
+            .add_label_ids("INBOX")
+            .q(&format!("before:{before_epoch_secs}"))
+            .max_results(max_results)
+            .doit()
+            .await
+            .context("Failed to list backfill messages")?;
+
+        let messages = list_response.messages.unwrap_or_default();
+        let mut emails = Vec::new();
+
+        for msg in messages {
+            if let Some(id) = msg.id {
+                match self.get_message(&id).await {
+                    Ok(email) => emails.push(email),
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch message {}: {}", id, e);
+                    }
+                }
+            }
+        }
+
+        Ok(emails)
+    }
+
     /// Fetch messages since a history ID (incremental sync)
     pub async fn fetch_messages_since(
         &self,

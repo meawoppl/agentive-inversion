@@ -1,11 +1,12 @@
 use gloo_net::http::Request;
 use shared_types::{
-    AboutMeResponse, AgentDecisionResponse, ApproveDecisionRequest, AuthUserResponse,
-    BatchApproveDecisionsRequest, BatchRejectDecisionsRequest, CalendarEventResponse, Category,
-    ChatMessageResponse, ChatResponse, ClaudeAuthStatusResponse, CreateTodoRequest, DecisionStats,
-    EmailResponse, GoogleAccountResponse, LoginInitResponse, PipelineStatsResponse,
-    ProposedCalendarEventAction, ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest,
-    SuggestedAction, Todo, UpdateAboutMeRequest, UpdateTodoRequest,
+    AboutMeResponse, AgentDecisionResponse, ApproveDecisionRequest, ArchiveReviewItem,
+    ArchiveReviewResponse, AuthUserResponse, BatchApproveDecisionsRequest, BatchOperationResponse,
+    BatchRejectDecisionsRequest, CalendarEventResponse, Category, ChatMessageResponse,
+    ChatResponse, ClaudeAuthStatusResponse, CreateTodoRequest, DecisionStats, EmailResponse,
+    GoogleAccountResponse, LoginInitResponse, PipelineStatsResponse, ProposedCalendarEventAction,
+    ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest, SuggestedAction, Todo,
+    UpdateAboutMeRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 use web_sys::{Element, HtmlInputElement};
@@ -34,6 +35,7 @@ pub enum AuthState {
 #[derive(Clone, PartialEq, Copy)]
 pub enum View {
     Inbox,
+    Review,
     Todos,
     Calendar,
     DecisionLog,
@@ -536,6 +538,11 @@ fn authenticated_app(props: &AuthenticatedAppProps) -> Html {
         Callback::from(move |_| set_view.emit(View::Pipeline))
     };
 
+    let set_view_review = {
+        let set_view = ctx.set_view.clone();
+        Callback::from(move |_| set_view.emit(View::Review))
+    };
+
     let set_view_about_me = {
         let set_view = ctx.set_view.clone();
         Callback::from(move |_| set_view.emit(View::AboutMe))
@@ -571,6 +578,12 @@ fn authenticated_app(props: &AuthenticatedAppProps) -> Html {
                         } else {
                             html! {}
                         }}
+                    </button>
+                    <button
+                        class={if current_view == View::Review { "nav-btn active" } else { "nav-btn" }}
+                        onclick={set_view_review}
+                    >
+                        {"Review"}
                     </button>
                     <button
                         class={if current_view == View::Todos { "nav-btn active" } else { "nav-btn" }}
@@ -613,6 +626,7 @@ fn authenticated_app(props: &AuthenticatedAppProps) -> Html {
             <main>
                 {match current_view {
                     View::Inbox => html! { <DecisionInbox /> },
+                    View::Review => html! { <ArchiveReviewPanel /> },
                     View::Todos => html! { <TodoList /> },
                     View::Calendar => html! { <CalendarView /> },
                     View::DecisionLog => html! { <DecisionLog /> },
@@ -2573,6 +2587,398 @@ fn claude_auth_card() -> Html {
                         </button>
                     </div>
                 },
+            }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Archive Review: bundled rapid-accept
+// ============================================================================
+
+/// Monotonic bundle keys. Generated at dispatch sites (not in the reducer)
+/// so the failure path can schedule its re-enable timer against a known key.
+static NEXT_BUNDLE_KEY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn next_bundle_key() -> usize {
+    NEXT_BUNDLE_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+const REVIEW_BUNDLE_SIZE: usize = 10;
+/// How long a returned bundle's buttons stay disabled after a failed accept
+const RETURNED_BUNDLE_COOLDOWN_MS: u32 = 4_000;
+
+#[derive(Clone, PartialEq)]
+struct ReviewBundle {
+    key: usize,
+    items: Vec<ArchiveReviewItem>,
+    /// Came back after a failed accept
+    returned: bool,
+    /// Server error from the failed accept, shown on the card
+    error: Option<String>,
+}
+
+#[derive(PartialEq, Default)]
+struct ReviewQueue {
+    bundles: Vec<ReviewBundle>,
+    /// Bundle keys whose buttons are in the post-failure cooldown
+    disabled: std::collections::HashSet<usize>,
+    archive_mode: String,
+    loaded: bool,
+    banner: Option<String>,
+}
+
+enum ReviewMsg {
+    Loaded {
+        mode: String,
+        bundles: Vec<ReviewBundle>,
+    },
+    LoadFailed(String),
+    /// Optimistic accept: the front bundle disappears immediately
+    PopFront,
+    /// Failed accept: items rejoin at the back of the queue, disabled for a
+    /// cooldown so the rapid-click flow isn't interrupted by a dead retry
+    ReturnBundle {
+        key: usize,
+        items: Vec<ArchiveReviewItem>,
+        error: String,
+    },
+    CooldownOver(usize),
+    /// Per-item keep (optimistic)
+    RemoveItem {
+        bundle_key: usize,
+        decision_id: Uuid,
+    },
+    /// Drop a permanently-failing returned bundle without a backend call
+    DismissBundle(usize),
+    Banner(Option<String>),
+}
+
+impl Reducible for ReviewQueue {
+    type Action = ReviewMsg;
+
+    fn reduce(self: std::rc::Rc<Self>, msg: ReviewMsg) -> std::rc::Rc<Self> {
+        let mut next = ReviewQueue {
+            bundles: self.bundles.clone(),
+            disabled: self.disabled.clone(),
+            archive_mode: self.archive_mode.clone(),
+            loaded: self.loaded,
+            banner: self.banner.clone(),
+        };
+        match msg {
+            ReviewMsg::Loaded { mode, bundles } => {
+                next.archive_mode = mode;
+                next.bundles = bundles;
+                next.disabled.clear();
+                next.loaded = true;
+                next.banner = None;
+            }
+            ReviewMsg::LoadFailed(e) => {
+                next.loaded = true;
+                next.banner = Some(e);
+            }
+            ReviewMsg::PopFront => {
+                if !next.bundles.is_empty() {
+                    next.bundles.remove(0);
+                }
+            }
+            ReviewMsg::ReturnBundle { key, items, error } => {
+                next.disabled.insert(key);
+                next.banner = Some(format!(
+                    "{} email(s) couldn't be archived - returned to the back of the queue",
+                    items.len()
+                ));
+                next.bundles.push(ReviewBundle {
+                    key,
+                    items,
+                    returned: true,
+                    error: Some(error),
+                });
+            }
+            ReviewMsg::CooldownOver(key) => {
+                next.disabled.remove(&key);
+            }
+            ReviewMsg::RemoveItem {
+                bundle_key,
+                decision_id,
+            } => {
+                for b in &mut next.bundles {
+                    if b.key == bundle_key {
+                        b.items.retain(|i| i.decision_id != decision_id);
+                    }
+                }
+                next.bundles.retain(|b| !b.items.is_empty());
+            }
+            ReviewMsg::DismissBundle(key) => {
+                next.bundles.retain(|b| b.key != key);
+                next.disabled.remove(&key);
+            }
+            ReviewMsg::Banner(b) => next.banner = b,
+        }
+        next.into()
+    }
+}
+
+/// One-place rapid accept over archive proposals, in bundles of ten. Accept
+/// removes the bundle instantly and fires the backend work; anything the
+/// backend couldn't archive animates back into the queue.
+#[function_component(ArchiveReviewPanel)]
+fn archive_review_panel() -> Html {
+    let queue = use_reducer(ReviewQueue::default);
+
+    let load = {
+        let queue = queue.clone();
+        Callback::from(move |_: ()| {
+            let queue = queue.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match Request::get("/api/pipeline/archive-review").send().await {
+                    Ok(resp) if resp.ok() => match resp.json::<ArchiveReviewResponse>().await {
+                        Ok(data) => {
+                            let bundles = data
+                                .items
+                                .chunks(REVIEW_BUNDLE_SIZE)
+                                .map(|chunk| ReviewBundle {
+                                    key: next_bundle_key(),
+                                    items: chunk.to_vec(),
+                                    returned: false,
+                                    error: None,
+                                })
+                                .collect();
+                            queue.dispatch(ReviewMsg::Loaded {
+                                mode: data.archive_mode,
+                                bundles,
+                            });
+                        }
+                        Err(e) => {
+                            queue.dispatch(ReviewMsg::LoadFailed(format!("Bad response: {e}")))
+                        }
+                    },
+                    Ok(resp) => queue.dispatch(ReviewMsg::LoadFailed(format!(
+                        "API error: {}",
+                        resp.status()
+                    ))),
+                    Err(e) => queue.dispatch(ReviewMsg::LoadFailed(format!("Request failed: {e}"))),
+                }
+            });
+        })
+    };
+
+    {
+        let load = load.clone();
+        use_effect_with((), move |_| {
+            load.emit(());
+            || ()
+        });
+    }
+
+    let on_accept = {
+        let queue = queue.clone();
+        Callback::from(move |_| {
+            let Some(front) = queue.bundles.first() else {
+                return;
+            };
+            if queue.disabled.contains(&front.key) {
+                return;
+            }
+            let items = front.items.clone();
+            let ids: Vec<Uuid> = items.iter().map(|i| i.decision_id).collect();
+            // Optimistic: the bundle is gone before the network is involved,
+            // so the next bundle is already under the cursor
+            queue.dispatch(ReviewMsg::PopFront);
+            let queue = queue.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = BatchApproveDecisionsRequest { decision_ids: ids };
+                let outcome = match Request::post("/api/decisions/batch/approve")
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .expect("body")
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.ok() => match resp.json::<BatchOperationResponse>().await {
+                        Ok(out) if out.failed.is_empty() => Ok(()),
+                        Ok(out) => {
+                            let failed_ids: std::collections::HashSet<Uuid> =
+                                out.failed.iter().map(|f| f.id).collect();
+                            let error = out
+                                .failed
+                                .first()
+                                .map(|f| f.error.clone())
+                                .unwrap_or_default();
+                            let failed_items: Vec<ArchiveReviewItem> = items
+                                .into_iter()
+                                .filter(|i| failed_ids.contains(&i.decision_id))
+                                .collect();
+                            Err((failed_items, error))
+                        }
+                        // The server said ok but the body didn't parse: the
+                        // approvals executed, so returning items would only
+                        // set up doomed retries
+                        Err(e) => {
+                            queue.dispatch(ReviewMsg::Banner(Some(format!(
+                                "Accepted, but the response was unreadable: {e}"
+                            ))));
+                            Ok(())
+                        }
+                    },
+                    Ok(resp) => Err((items, format!("server error {}", resp.status()))),
+                    Err(e) => Err((items, format!("request failed: {e}"))),
+                };
+                if let Err((failed_items, error)) = outcome {
+                    let key = next_bundle_key();
+                    queue.dispatch(ReviewMsg::ReturnBundle {
+                        key,
+                        items: failed_items,
+                        error,
+                    });
+                    let queue = queue.clone();
+                    gloo::timers::callback::Timeout::new(RETURNED_BUNDLE_COOLDOWN_MS, move || {
+                        queue.dispatch(ReviewMsg::CooldownOver(key));
+                    })
+                    .forget();
+                }
+            });
+        })
+    };
+
+    let on_keep = {
+        let queue = queue.clone();
+        Callback::from(move |(bundle_key, decision_id): (usize, Uuid)| {
+            queue.dispatch(ReviewMsg::RemoveItem {
+                bundle_key,
+                decision_id,
+            });
+            let queue = queue.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let request = BatchRejectDecisionsRequest {
+                    decision_ids: vec![decision_id],
+                    feedback: None,
+                };
+                let failed = match Request::post("/api/decisions/batch/reject")
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(&request).unwrap())
+                    .expect("body")
+                    .send()
+                    .await
+                {
+                    Ok(resp) => !resp.ok(),
+                    Err(_) => true,
+                };
+                if failed {
+                    queue.dispatch(ReviewMsg::Banner(Some(
+                        "Keep didn't reach the server - that email is still proposed for archive"
+                            .to_string(),
+                    )));
+                }
+            });
+        })
+    };
+
+    let total_emails: usize = queue.bundles.iter().map(|b| b.items.len()).sum();
+    let front = queue.bundles.first().cloned();
+    let front_disabled = front
+        .as_ref()
+        .map(|b| queue.disabled.contains(&b.key))
+        .unwrap_or(true);
+
+    html! {
+        <div class="archive-review">
+            <div class="view-header">
+                <h2>{"Archive Review"}</h2>
+                {if queue.archive_mode == "propose" {
+                    html! { <span class="mode-badge mode-dry-run" title="The agent only proposes; accepting a bundle is what archives those emails in Gmail">{"dry-run"}</span> }
+                } else if !queue.archive_mode.is_empty() {
+                    html! { <span class="mode-badge mode-execute">{&queue.archive_mode}</span> }
+                } else {
+                    html! {}
+                }}
+                <button class="btn-secondary" onclick={let load = load.clone(); Callback::from(move |_| load.emit(()))}>
+                    {"Refresh"}
+                </button>
+            </div>
+            {if let Some(msg) = queue.banner.clone() {
+                html! { <div class="review-banner">{msg}</div> }
+            } else {
+                html! {}
+            }}
+            {match front {
+                None if !queue.loaded => html! { <p class="empty-state">{"Loading proposals..."}</p> },
+                None => html! {
+                    <p class="empty-state">{"Nothing awaiting review. The agent will keep proposing as the backlog drains."}</p>
+                },
+                Some(bundle) => {
+                    let bundle_key = bundle.key;
+                    html! {
+                        <>
+                            <div class="rapid-accept-bar">
+                                <button
+                                    class="btn-approve accept-big-btn"
+                                    disabled={front_disabled}
+                                    onclick={on_accept.clone()}
+                                >
+                                    {format!("Archive these {}", bundle.items.len())}
+                                </button>
+                                <span class="review-progress">
+                                    {format!("{} emails in {} bundles remaining", total_emails, queue.bundles.len())}
+                                </span>
+                            </div>
+                            <div class={if bundle.returned { "review-bundle-card bundle-returned" } else { "review-bundle-card" }}>
+                                {if let Some(err) = bundle.error.clone() {
+                                    html! {
+                                        <div class="bundle-error-note">
+                                            {format!("Returned after a failed attempt: {err}")}
+                                            <button
+                                                class="btn-secondary"
+                                                disabled={front_disabled}
+                                                onclick={let queue = queue.clone(); Callback::from(move |_| queue.dispatch(ReviewMsg::DismissBundle(bundle_key)))}
+                                            >
+                                                {"Dismiss bundle"}
+                                            </button>
+                                        </div>
+                                    }
+                                } else {
+                                    html! {}
+                                }}
+                                {for bundle.items.iter().map(|item| {
+                                    let keep = on_keep.clone();
+                                    let decision_id = item.decision_id;
+                                    html! {
+                                        <div class="review-item-row" key={item.decision_id.to_string()}>
+                                            <div class="review-item-main">
+                                                <span class="review-item-from">
+                                                    {item.from_name.clone().unwrap_or_else(|| item.from_address.clone())}
+                                                </span>
+                                                <span class="review-item-subject">{&item.subject}</span>
+                                                <span class="review-item-reason" title={item.reasoning.clone()}>
+                                                    {&item.reasoning}
+                                                </span>
+                                            </div>
+                                            <span class="review-item-date">
+                                                {item.received_at.format("%Y-%m-%d").to_string()}
+                                            </span>
+                                            <button
+                                                class="btn-secondary review-keep-btn"
+                                                disabled={front_disabled}
+                                                onclick={Callback::from(move |_| keep.emit((bundle_key, decision_id)))}
+                                            >
+                                                {"Keep"}
+                                            </button>
+                                        </div>
+                                    }
+                                })}
+                            </div>
+                            {if queue.bundles.len() > 1 {
+                                html! {
+                                    <p class="review-queue-hint">
+                                        {format!("{} more bundles queued behind this one", queue.bundles.len() - 1)}
+                                    </p>
+                                }
+                            } else {
+                                html! {}
+                            }}
+                        </>
+                    }
+                }
             }}
         </div>
     }

@@ -362,6 +362,22 @@ pub mod emails {
         Ok(count)
     }
 
+    /// Oldest received timestamp stored for an account — the starting point
+    /// for walking the mailbox history backwards during backfill
+    pub async fn oldest_received_at(
+        conn: &mut AsyncPgConnection,
+        account: Uuid,
+    ) -> anyhow::Result<Option<chrono::DateTime<chrono::Utc>>> {
+        use crate::schema::emails::dsl::*;
+
+        let oldest = emails
+            .filter(account_id.eq(account))
+            .select(diesel::dsl::min(received_at))
+            .get_result::<Option<chrono::DateTime<chrono::Utc>>>(conn)
+            .await?;
+        Ok(oldest)
+    }
+
     /// Insert a new email, returning None if this account already has it.
     /// Gmail ids are only unique per mailbox, so the conflict target must be
     /// (account_id, gmail_id) — matching the table's unique constraint.

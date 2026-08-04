@@ -98,6 +98,11 @@ impl RateLimiter {
 #[derive(Debug, Clone, Default)]
 struct AccountState {
     last_history_id: Option<u64>,
+    /// Walks backwards through inbox history one batch per cycle; seeded
+    /// from the oldest stored email, so a restart resumes near where it left
+    /// off (dedupe absorbs the overlap)
+    backfill_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    backfill_done: bool,
 }
 
 /// Start the email polling background task
@@ -266,7 +271,7 @@ struct PollResult {
 
 async fn poll_single_account(
     account: &GoogleAccount,
-    state: &AccountState,
+    state: &mut AccountState,
     pool: &DbPool,
     max_fetch_per_poll: u32,
 ) -> Result<PollResult> {
@@ -285,12 +290,74 @@ async fn poll_single_account(
         _ => client.fetch_messages(max_fetch_per_poll).await?,
     };
 
-    let count = save_emails_to_db(&emails, account.id, pool).await?;
+    let mut count = save_emails_to_db(&emails, account.id, pool).await?;
+    count += backfill_older_messages(account, state, &client, pool, max_fetch_per_poll).await?;
 
     // Get current history ID for next sync
     let history_id = client.get_history_id().await.ok();
 
     Ok(PollResult { count, history_id })
+}
+
+/// Walk the inbox history backwards one batch per cycle until exhausted, so
+/// triage extends indefinitely into the past. The cursor only ever moves
+/// backwards; (account_id, gmail_id) dedupe makes fetch overlap harmless.
+async fn backfill_older_messages(
+    account: &GoogleAccount,
+    state: &mut AccountState,
+    client: &GmailClient,
+    pool: &DbPool,
+    max_fetch_per_poll: u32,
+) -> Result<usize> {
+    if state.backfill_done {
+        return Ok(0);
+    }
+
+    let cursor = match state.backfill_cursor {
+        Some(c) => Some(c),
+        None => {
+            let mut conn = pool.get().await.context("Failed to get DB connection")?;
+            db::emails::oldest_received_at(&mut conn, account.id).await?
+        }
+    };
+    // Nothing stored yet: let the initial forward fetch land first
+    let Some(cursor) = cursor else { return Ok(0) };
+
+    let older = client
+        .fetch_messages_before(cursor.timestamp(), max_fetch_per_poll)
+        .await?;
+
+    if older.is_empty() {
+        state.backfill_done = true;
+        tracing::info!(
+            "Backfill complete for {}: inbox history exhausted at {}",
+            account.email,
+            cursor
+        );
+        return Ok(0);
+    }
+
+    let count = save_emails_to_db(&older, account.id, pool).await?;
+
+    // Advance strictly backwards even if every fetched message was already
+    // stored (header dates can postdate Gmail's internal date, which is what
+    // `before:` matches on) — otherwise the cursor would stall forever
+    let oldest_fetched = older.iter().filter_map(|e| e.received_at).min();
+    let next = match oldest_fetched {
+        Some(t) if t < cursor => t,
+        _ => cursor - chrono::Duration::seconds(1),
+    };
+    state.backfill_cursor = Some(next);
+
+    tracing::info!(
+        "Backfilled {} older emails from {} ({} fetched, cursor now {})",
+        count,
+        account.email,
+        older.len(),
+        next
+    );
+
+    Ok(count)
 }
 
 async fn save_emails_to_db(

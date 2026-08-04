@@ -87,7 +87,6 @@ impl TriageService {
                     reasoning_details.as_deref(),
                     0.9,
                     DecisionStatus::AutoApproved.as_str(),
-                    None,
                 )
                 .await?;
                 db::emails::set_triage_status(&mut conn, email.id, "ignored").await?;
@@ -126,7 +125,6 @@ impl TriageService {
                         reasoning_details.as_deref(),
                         0.9,
                         DecisionStatus::Proposed.as_str(),
-                        None,
                     )
                     .await?;
                     db::emails::set_triage_status(&mut conn, email.id, "archive_proposed").await?;
@@ -154,7 +152,6 @@ impl TriageService {
                     reasoning_details.as_deref(),
                     0.9,
                     DecisionStatus::AutoApproved.as_str(),
-                    None,
                 )
                 .await?;
 
@@ -221,7 +218,6 @@ impl TriageService {
                     reasoning_details.as_deref(),
                     0.8,
                     DecisionStatus::Proposed.as_str(),
-                    None,
                 )
                 .await?;
                 db::emails::set_triage_status(&mut conn, email.id, "event_proposed").await?;
@@ -258,7 +254,6 @@ impl TriageService {
                     reasoning_details.as_deref(),
                     0.8,
                     DecisionStatus::Proposed.as_str(),
-                    None,
                 )
                 .await?;
                 db::emails::set_triage_status(&mut conn, email.id, "todo_proposed").await?;

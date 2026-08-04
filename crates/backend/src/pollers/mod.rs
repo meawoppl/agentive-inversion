@@ -6,7 +6,6 @@
 pub mod calendar;
 pub mod email;
 pub mod gmail_client;
-mod processor;
 pub mod triage;
 
 pub use calendar::start_calendar_polling_task;

@@ -3083,7 +3083,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "diesel",
- "regex",
  "serde",
  "serde_json",
  "tracing",

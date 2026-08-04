@@ -20,7 +20,7 @@ This project uses a Rust workspace with the following crates:
 
 ### Shared Types (`crates/shared-types`)
 - Common data structures used across all crates
-- Includes models for todos, google accounts, emails, calendar events, agent decisions, and rules
+- Includes models for todos, google accounts, emails, calendar events, and agent decisions
 - Serialization support for both API and database
 
 ## Data Flow
@@ -29,8 +29,9 @@ This project uses a Rust workspace with the following crates:
 Gmail Accounts → Email Poller (in backend) → Database ← Backend API ← Frontend
 ```
 
-Emails are classified by agent rules plus a keyword heuristic. Actionable ones
-become pending decisions in the decision inbox; approving a decision creates a todo.
+Emails are classified by the agentic triage pipeline (Claude Code sessions
+driven by the backend). Actionable ones become pending decisions in the
+decision inbox; approving a decision creates a todo.
 
 ## Database Schema
 
@@ -41,7 +42,6 @@ become pending decisions in the decision inbox; approving a decision creates a t
 - **calendar_events**: Google Calendar events (poller not yet implemented)
 - **categories**: Todo categories
 - **agent_decisions**: Proposed actions awaiting review in the decision inbox
-- **agent_rules**: User-defined rules for automatic email classification
 - **chat_messages**: Chat widget history
 
 ### Todo Sources

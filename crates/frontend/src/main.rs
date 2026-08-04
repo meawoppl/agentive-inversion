@@ -729,8 +729,6 @@ fn decision_inbox() -> Html {
             wasm_bindgen_futures::spawn_local(async move {
                 let request = ApproveDecisionRequest {
                     modifications: None,
-                    create_rule: None,
-                    rule_name: None,
                 };
                 if let Ok(response) = Request::post(&format!("/api/decisions/{}/approve", id))
                     .header("Content-Type", "application/json")
@@ -758,11 +756,7 @@ fn decision_inbox() -> Html {
             let selected_decision = selected_decision.clone();
             let refresh_pending = refresh_pending.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let request = RejectDecisionRequest {
-                    feedback,
-                    create_rule: None,
-                    rule_action: None,
-                };
+                let request = RejectDecisionRequest { feedback };
                 if let Ok(response) = Request::post(&format!("/api/decisions/{}/reject", id))
                     .header("Content-Type", "application/json")
                     .body(serde_json::to_string(&request).unwrap())

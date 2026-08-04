@@ -4,23 +4,22 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use shared_types::{
-    AboutMeResponse, AgentDecisionResponse, AgentRuleResponse, ApproveDecisionRequest,
-    ArchiveReviewItem, ArchiveReviewResponse, BatchApproveDecisionsRequest, BatchOperationFailure,
+    AboutMeResponse, AgentDecisionResponse, ApproveDecisionRequest, ArchiveReviewItem,
+    ArchiveReviewResponse, BatchApproveDecisionsRequest, BatchOperationFailure,
     BatchOperationResponse, BatchRejectDecisionsRequest, CalendarEventQuery, CalendarEventResponse,
     Category, ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse,
     ClaudeAuthCompleteRequest, ClaudeAuthStartResponse, ClaudeAuthStatusResponse,
-    CreateAgentDecisionRequest, CreateAgentRuleRequest, CreateCalendarEventRequest,
-    CreateCalendarEventResponse, CreateCategoryRequest, CreateTodoRequest, DecisionStats,
-    EmailListQuery, EmailResponse, GoogleAccountResponse, PipelineStatsResponse,
-    RejectDecisionRequest, RuleListQuery, SendChatMessageRequest, SuggestedAction, Todo,
-    TriageDecideRequest, TriageDecideResponse, TriageStageCount, UpdateAboutMeRequest,
-    UpdateAgentRuleRequest, UpdateCategoryRequest, UpdateTodoRequest,
+    CreateAgentDecisionRequest, CreateCalendarEventRequest, CreateCalendarEventResponse,
+    CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailListQuery, EmailResponse,
+    GoogleAccountResponse, PipelineStatsResponse, RejectDecisionRequest, SendChatMessageRequest,
+    SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse, TriageStageCount,
+    UpdateAboutMeRequest, UpdateCategoryRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 
 // Authentication is handled by middleware layer in main.rs
 use crate::db::{
-    about_me, agent_rules, calendar_events, categories, chat_messages, decisions, emails, get_conn,
+    about_me, calendar_events, categories, chat_messages, decisions, emails, get_conn,
     google_accounts, todos,
 };
 use crate::error::{ApiError, ApiResult};
@@ -735,103 +734,6 @@ pub async fn batch_reject_decisions(
     Ok(Json(BatchOperationResponse {
         successful: result.successful,
         failed,
-    }))
-}
-
-// Agent rules handlers
-pub async fn list_agent_rules(
-    State(state): State<AppState>,
-    Query(query): Query<RuleListQuery>,
-) -> ApiResult<Json<Vec<AgentRuleResponse>>> {
-    let mut conn = state.pool.get().await?;
-
-    let rules = if let Some(source) = &query.source_type {
-        agent_rules::list_by_source_type(&mut conn, source).await?
-    } else if query.is_active == Some(true) {
-        agent_rules::list_active(&mut conn).await?
-    } else {
-        agent_rules::list_all(&mut conn).await?
-    };
-
-    let responses: Vec<AgentRuleResponse> = rules
-        .into_iter()
-        .filter_map(|r| r.try_into().ok())
-        .collect();
-
-    Ok(Json(responses))
-}
-
-pub async fn get_agent_rule(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<AgentRuleResponse>> {
-    let mut conn = state.pool.get().await?;
-    let rule = agent_rules::get_by_id(&mut conn, id).await?;
-    let response: AgentRuleResponse = rule.try_into()?;
-    Ok(Json(response))
-}
-
-pub async fn create_agent_rule(
-    State(state): State<AppState>,
-    Json(payload): Json<CreateAgentRuleRequest>,
-) -> ApiResult<Json<AgentRuleResponse>> {
-    let mut conn = state.pool.get().await?;
-
-    let rule = agent_rules::create(&mut conn, &payload).await?;
-    let response: AgentRuleResponse = rule.try_into()?;
-    Ok(Json(response))
-}
-
-pub async fn update_agent_rule(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<UpdateAgentRuleRequest>,
-) -> ApiResult<Json<AgentRuleResponse>> {
-    let mut conn = state.pool.get().await?;
-    let rule = agent_rules::update(
-        &mut conn,
-        id,
-        payload.name.as_deref(),
-        payload.description.as_deref(),
-        payload.source_type.as_deref(),
-        payload.rule_type.as_deref(),
-        payload.conditions.as_ref(),
-        payload.action.as_deref(),
-        payload.action_params.as_ref(),
-        payload.priority,
-        payload.is_active,
-    )
-    .await?;
-    let response: AgentRuleResponse = rule.try_into()?;
-    Ok(Json(response))
-}
-
-pub async fn delete_agent_rule(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<StatusCode> {
-    let mut conn = state.pool.get().await?;
-    agent_rules::delete(&mut conn, id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Debug, Serialize)]
-pub struct ToggleActiveResponse {
-    pub id: Uuid,
-    pub is_active: bool,
-}
-
-pub async fn toggle_agent_rule_active(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<ToggleActiveResponse>> {
-    let mut conn = state.pool.get().await?;
-    let current = agent_rules::get_by_id(&mut conn, id).await?;
-
-    let updated = agent_rules::set_active(&mut conn, id, !current.is_active).await?;
-    Ok(Json(ToggleActiveResponse {
-        id: updated.id,
-        is_active: updated.is_active,
     }))
 }
 

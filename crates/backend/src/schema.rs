@@ -16,36 +16,11 @@ diesel::table! {
         confidence -> Float4,
         #[max_length = 50]
         status -> Varchar,
-        applied_rule_id -> Nullable<Uuid>,
         result_todo_id -> Nullable<Uuid>,
         user_feedback -> Nullable<Text>,
         created_at -> Timestamptz,
         reviewed_at -> Nullable<Timestamptz>,
         executed_at -> Nullable<Timestamptz>,
-    }
-}
-
-diesel::table! {
-    agent_rules (id) {
-        id -> Uuid,
-        #[max_length = 255]
-        name -> Varchar,
-        description -> Nullable<Text>,
-        #[max_length = 50]
-        source_type -> Varchar,
-        #[max_length = 50]
-        rule_type -> Varchar,
-        conditions -> Text,
-        #[max_length = 50]
-        action -> Varchar,
-        action_params -> Nullable<Text>,
-        priority -> Int4,
-        is_active -> Bool,
-        created_from_decision_id -> Nullable<Uuid>,
-        match_count -> Int4,
-        last_matched_at -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
     }
 }
 
@@ -186,7 +161,6 @@ diesel::joinable!(todos -> categories (category_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     agent_decisions,
-    agent_rules,
     calendar_events,
     categories,
     chat_messages,

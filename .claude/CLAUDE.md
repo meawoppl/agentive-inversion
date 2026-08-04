@@ -177,7 +177,7 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
 - Agents act ONLY through the `agent-cli` binary -> REST API (`POST /api/triage/decisions`); never give agents direct DB access
 - INVARIANT: ingestion is never gated on triage; Anthropic/API failures must never touch Gmail-sync health or backoff (separate failure domains)
 - Calendar writes are gated: agents propose `create_calendar_event` decisions; approval executes to the "Agent" calendar
-- Requires `claude` binary + `ANTHROPIC_API_KEY` in the container; otherwise mode=disabled and the keyword heuristic fallback runs
+- Requires the `claude` binary plus a credential (DB-stored login token preferred, `ANTHROPIC_API_KEY` env fallback); otherwise mode=disabled and emails simply stay pending — there is no other classifier (the old keyword/rule system was removed 2026-08-04)
 - Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them
 
 ## Environment Variables

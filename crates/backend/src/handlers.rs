@@ -514,7 +514,7 @@ pub async fn get_archive_review(
 ) -> ApiResult<Json<ArchiveReviewResponse>> {
     let mut conn = get_conn(&state.pool).await?;
 
-    let decisions_list = decisions::list_by_type(&mut conn, "archive", 500).await?;
+    let decisions_list = decisions::list_proposed_by_type(&mut conn, "archive", 500).await?;
     let email_ids: Vec<Uuid> = decisions_list.iter().filter_map(|d| d.source_id).collect();
     let emails_list = emails::list_by_ids(&mut conn, &email_ids).await?;
     let accounts = google_accounts::list_all(&mut conn).await?;

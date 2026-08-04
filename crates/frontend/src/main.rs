@@ -2790,6 +2790,9 @@ impl Reducible for ReviewQueue {
 #[function_component(ArchiveReviewPanel)]
 fn archive_review_panel() -> Html {
     let queue = use_reducer(ReviewQueue::default);
+    // Accepts/keeps here resolve pending decisions; the nav badge and the
+    // decision inbox count must learn about it
+    let refresh_pending = use_app_context().refresh_pending_count;
 
     let load = {
         let queue = queue.clone();
@@ -2828,6 +2831,7 @@ fn archive_review_panel() -> Html {
 
     let on_accept = {
         let queue = queue.clone();
+        let refresh_pending = refresh_pending.clone();
         Callback::from(move |_| {
             let Some(front) = queue.bundles.first() else {
                 return;
@@ -2841,6 +2845,7 @@ fn archive_review_panel() -> Html {
             // so the next bundle is already under the cursor
             queue.dispatch(ReviewMsg::PopFront);
             let queue = queue.clone();
+            let refresh_pending = refresh_pending.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let request = BatchApproveDecisionsRequest { decision_ids: ids };
                 let outcome = match Request::post("/api/decisions/batch/approve")
@@ -2892,18 +2897,21 @@ fn archive_review_panel() -> Html {
                     })
                     .forget();
                 }
+                refresh_pending.emit(());
             });
         })
     };
 
     let on_keep = {
         let queue = queue.clone();
+        let refresh_pending = refresh_pending.clone();
         Callback::from(move |(bundle_key, decision_id): (usize, Uuid)| {
             queue.dispatch(ReviewMsg::RemoveItem {
                 bundle_key,
                 decision_id,
             });
             let queue = queue.clone();
+            let refresh_pending = refresh_pending.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let request = BatchRejectDecisionsRequest {
                     decision_ids: vec![decision_id],
@@ -2925,6 +2933,7 @@ fn archive_review_panel() -> Html {
                             .to_string(),
                     )));
                 }
+                refresh_pending.emit(());
             });
         })
     };

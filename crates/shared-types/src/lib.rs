@@ -407,6 +407,8 @@ pub struct ArchiveReviewItem {
     pub from_name: Option<String>,
     pub received_at: DateTime<Utc>,
     pub snippet: Option<String>,
+    /// Leading portion of the plain-text body, for hover preview in review
+    pub body_preview: Option<String>,
 }
 
 /// Bulk view of archive determinations (dry-run audit surface)

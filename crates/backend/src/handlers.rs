@@ -413,15 +413,15 @@ pub async fn claude_auth_complete(
     let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(claude_codes::Error::CodeRejected { message }) => {
-            // The CLI is alive awaiting a retry against the same PKCE
-            // verifier; put the flow back so a corrected paste reaches it
+            // A rejected code is terminal for this CLI session: the error
+            // screen renders no input component, and Enter restarts the OAuth
+            // flow with a fresh PKCE verifier — a corrected paste has nowhere
+            // to land (read out of the Ink state machine and verified against
+            // the live CLI). Kill the child; the UI starts a new login.
             tracing::warn!("Claude login: code rejected by CLI: {message}");
-            *state
-                .claude_login
-                .lock()
-                .expect("claude_login mutex poisoned") = Some((flow, started));
+            drop(flow);
             return Err(ApiError::BadRequest(format!(
-                "Code rejected: {message} - check the paste and try again"
+                "Code rejected: {message} - start a new login and paste the fresh code"
             )));
         }
         Err(claude_codes::Error::LoginTimeout { transcript }) => {

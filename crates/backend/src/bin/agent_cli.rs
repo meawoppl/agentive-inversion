@@ -120,6 +120,14 @@ enum DecideCommands {
         #[arg(long)]
         reasoning: String,
     },
+    /// Propose forwarding (e.g. a receipt to the expense system); the
+    /// destination is server policy and the user approves before it sends
+    Forward {
+        #[arg(long)]
+        email_id: Uuid,
+        #[arg(long)]
+        reasoning: String,
+    },
 }
 
 fn resolve_token(cli_token: Option<String>) -> Result<String> {
@@ -203,6 +211,10 @@ async fn main() -> Result<()> {
                     email_id,
                     reasoning,
                 } => (email_id, TriageDecideAction::QueueAction, reasoning),
+                DecideCommands::Forward {
+                    email_id,
+                    reasoning,
+                } => (email_id, TriageDecideAction::Forward, reasoning),
                 DecideCommands::Event {
                     email_id,
                     summary,

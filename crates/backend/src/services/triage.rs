@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::db::{self, DbPool};
 use crate::pollers::gmail_client::GmailClient;
 use shared_types::{
-    DecisionStatus, DecisionType, ProposedCalendarEventAction, ProposedTodoAction,
-    TriageDecideAction, TriageDecideRequest, TriageDecideResponse,
+    DecisionStatus, DecisionType, ProposedCalendarEventAction, ProposedForwardAction,
+    ProposedTodoAction, TriageDecideAction, TriageDecideRequest, TriageDecideResponse,
 };
 
 /// Gmail label applied to everything the agent archives
@@ -20,6 +20,15 @@ pub const AGENT_ARCHIVE_LABEL: &str = "agent-archived";
 
 /// Default calendar for agent-created events
 pub const AGENT_CALENDAR_NAME: &str = "Agent";
+
+/// Gmail label applied to everything the agent forwards
+pub const AGENT_FORWARD_LABEL: &str = "agent-forwarded";
+
+/// Where forward proposals are addressed (e.g. the Ramp receipts inbox).
+/// Server policy: agents propose THAT an email be forwarded, never where to.
+pub fn forward_to_address() -> String {
+    std::env::var("TRIAGE_FORWARD_TO").unwrap_or_else(|_| "receipts@ramp.com".to_string())
+}
 
 /// Archive execution policy. "propose" (the default) records Sonnet's
 /// determinations as gated proposals with full fidelity but never touches
@@ -105,6 +114,41 @@ impl TriageService {
                     email_id: email.id,
                     decision_id: None,
                     triage_status: "action_queued".to_string(),
+                    executed: false,
+                })
+            }
+
+            TriageDecideAction::Forward => {
+                // Always gated: sending mail is outward-facing. Approval
+                // forwards from the account the email landed in, then labels
+                // and archives it (a forwarded receipt is a handled receipt).
+                let account = db::google_accounts::get_by_id(&mut conn, email.account_id)
+                    .await
+                    .context("Account for email not found")?;
+                let action = ProposedForwardAction {
+                    to_address: forward_to_address(),
+                    from_account: account.email.clone(),
+                    subject: email.subject.clone(),
+                };
+                let decision_id = db::decisions::create_with_status(
+                    &mut conn,
+                    "email",
+                    Some(email.id),
+                    Some(&email.gmail_id),
+                    DecisionType::ForwardEmail.as_str(),
+                    &serde_json::to_string(&action)?,
+                    &req.reasoning,
+                    reasoning_details.as_deref(),
+                    0.9,
+                    DecisionStatus::Proposed.as_str(),
+                )
+                .await?;
+                db::emails::set_triage_status(&mut conn, email.id, "forward_proposed").await?;
+                db::emails::mark_processed(&mut conn, email.id).await?;
+                Ok(TriageDecideResponse {
+                    email_id: email.id,
+                    decision_id: Some(decision_id),
+                    triage_status: "forward_proposed".to_string(),
                     executed: false,
                 })
             }
@@ -292,6 +336,46 @@ impl TriageService {
         let mut conn = pool.get().await.context("Failed to get DB connection")?;
         db::emails::mark_archived_in_gmail(&mut conn, email.id).await?;
         db::emails::set_triage_status(&mut conn, email.id, "archived").await?;
+        db::decisions::mark_executed(&mut conn, decision_id).await?;
+
+        Ok(())
+    }
+
+    /// Execute an approved forward decision: send the original message as an
+    /// RFC 822 attachment from the account it landed in, then label it
+    /// agent-forwarded and archive it — a forwarded receipt is handled.
+    pub async fn execute_forward_decision(pool: &DbPool, decision_id: Uuid) -> Result<()> {
+        let mut conn = pool.get().await.context("Failed to get DB connection")?;
+
+        let decision = db::decisions::get_by_id(&mut conn, decision_id)
+            .await
+            .context("Decision not found")?;
+        let action: ProposedForwardAction = serde_json::from_str(&decision.proposed_action)
+            .context("Forward decision has malformed proposed_action")?;
+        let email_id = decision
+            .source_id
+            .context("Forward decision has no source email")?;
+        let email = db::emails::get_by_id(&mut conn, email_id).await?;
+        let account = db::google_accounts::get_by_id(&mut conn, email.account_id).await?;
+        drop(conn);
+
+        let client = GmailClient::from_account(&account).await?;
+        client
+            .forward_as_attachment(
+                &email.gmail_id,
+                &action.to_address,
+                &account.email,
+                &email.subject,
+            )
+            .await?;
+        let label_id = client.ensure_label(AGENT_FORWARD_LABEL).await?;
+        client
+            .archive_with_label(&email.gmail_id, &label_id)
+            .await?;
+
+        let mut conn = pool.get().await.context("Failed to get DB connection")?;
+        db::emails::mark_archived_in_gmail(&mut conn, email.id).await?;
+        db::emails::set_triage_status(&mut conn, email.id, "forwarded").await?;
         db::decisions::mark_executed(&mut conn, decision_id).await?;
 
         Ok(())

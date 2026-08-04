@@ -706,8 +706,10 @@ pub mod decisions {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    /// List decisions of one type, newest first
-    pub async fn list_by_type(
+    /// List still-proposed decisions of one type, newest first. The review
+    /// queue feeds off this: already approved/executed/rejected decisions
+    /// must not reappear as acceptable work.
+    pub async fn list_proposed_by_type(
         conn: &mut AsyncPgConnection,
         decision_type_val: &str,
         limit: i64,
@@ -716,6 +718,7 @@ pub mod decisions {
 
         let rows = agent_decisions
             .filter(decision_type.eq(decision_type_val))
+            .filter(status.eq(DecisionStatus::Proposed.as_str()))
             .order_by(created_at.desc())
             .limit(limit)
             .load::<AgentDecisionRow>(conn)

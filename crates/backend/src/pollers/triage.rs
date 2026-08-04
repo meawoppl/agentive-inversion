@@ -108,6 +108,9 @@ Dispositions:
   agent-cli decide event --email-id <id> --summary "<title>" --start <rfc3339> --end <rfc3339> [--location "<loc>"] [--description "<details>"] --reasoning "<why>"
   If the timezone is unclear, assume America/Los_Angeles. If no end time is
   given, assume one hour after the start.
+  Only propose events whose date is in the FUTURE relative to today's date
+  (given below the emails count). An event, opportunity, or deadline that has
+  already passed is an archive candidate, not an event — the moment is gone.
 - Requires the user to act, reply, decide, or follow up:
   agent-cli decide queue-action --email-id <id> --reasoning "<why>"
 - Personal or potentially important, but nothing to do right now:
@@ -129,8 +132,11 @@ agent-cli via Bash:
 Be conservative: personal correspondence, money, legal, medical, childcare,
 travel, or anything that reads like a human wrote it to the user specifically
 should be kept. Bulk mail, marketing, and automated notifications with no
-action should be archived. One call per email; do not skip any. Finish with a
-one-line summary."#;
+action should be archived. Emails about events, opportunities, or deadlines
+whose date has already passed (relative to today's date, given below the
+emails count) should be archived even if they once mattered — unless they
+still require follow-up from the user. One call per email; do not skip any.
+Finish with a one-line summary."#;
 
 const ACTION_INSTRUCTIONS: &str = r#"You are the action stage of an email triage pipeline: you decide what belongs
 on the user's todo list.
@@ -432,9 +438,12 @@ async fn run_stage(
         .await
         .context("Failed to start claude session")?;
 
+    // The date matters: the backlog extends indefinitely into the past, and
+    // several dispositions hinge on whether an event date has already gone by
     let prompt = format!(
-        "{instructions}\n\nThere are {} emails in ./emails.json.",
-        emails.len()
+        "{instructions}\n\nThere are {} emails in ./emails.json. Today's date is {} (UTC).",
+        emails.len(),
+        Utc::now().format("%Y-%m-%d")
     );
 
     let result = tokio::time::timeout(timeout, client.query(&prompt)).await;

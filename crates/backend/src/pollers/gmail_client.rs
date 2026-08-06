@@ -214,6 +214,73 @@ impl GmailClient {
         Ok(Self::parse_message(message))
     }
 
+    /// Fetch the List-Unsubscribe / List-Unsubscribe-Post headers for a
+    /// message (metadata-only fetch — cheap, works for any stored email
+    /// without schema support)
+    pub async fn get_unsubscribe_headers(
+        &self,
+        message_id: &str,
+    ) -> Result<(Option<String>, Option<String>)> {
+        let (_, message) = self
+            .hub
+            .users()
+            .messages_get("me", message_id)
+            .format("metadata")
+            .add_metadata_headers("List-Unsubscribe")
+            .add_metadata_headers("List-Unsubscribe-Post")
+            .doit()
+            .await
+            .context("Failed to fetch unsubscribe headers")?;
+
+        let mut list_unsubscribe = None;
+        let mut list_unsubscribe_post = None;
+        if let Some(headers) = message.payload.and_then(|p| p.headers) {
+            for h in headers {
+                match h.name.as_deref() {
+                    Some(n) if n.eq_ignore_ascii_case("List-Unsubscribe") => {
+                        list_unsubscribe = h.value;
+                    }
+                    Some(n) if n.eq_ignore_ascii_case("List-Unsubscribe-Post") => {
+                        list_unsubscribe_post = h.value;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok((list_unsubscribe, list_unsubscribe_post))
+    }
+
+    /// Send a bare plain-text message from this account (mailto-style
+    /// unsubscribe requests)
+    pub async fn send_plain_message(
+        &self,
+        to_address: &str,
+        from_address: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<()> {
+        let clean =
+            |s: &str| -> String { s.chars().filter(|c| *c != '\r' && *c != '\n').collect() };
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: {}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}\r\n",
+            clean(from_address),
+            clean(to_address),
+            clean(subject),
+            body
+        );
+
+        self.hub
+            .users()
+            .messages_send(google_gmail1::api::Message::default(), "me")
+            .upload(
+                std::io::Cursor::new(mime.into_bytes()),
+                "message/rfc822".parse().expect("static mime type"),
+            )
+            .await
+            .context("Failed to send message")?;
+        Ok(())
+    }
+
     /// Forward a message as an RFC 822 attachment from this account. Gmail
     /// has no forward endpoint, so this fetches the original raw message and
     /// sends a new one carrying it whole — headers, body, and attachments

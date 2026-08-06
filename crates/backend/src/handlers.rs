@@ -193,6 +193,17 @@ pub async fn get_email(
     }))
 }
 
+/// Attempt a standardized unsubscribe for the sender of this email
+pub async fn unsubscribe_email(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<shared_types::UnsubscribeResponse>> {
+    let resp = crate::services::UnsubscribeService::unsubscribe(&state.pool, id)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(resp))
+}
+
 #[derive(Debug, Serialize)]
 pub struct EmailStatsResponse {
     pub total: i64,

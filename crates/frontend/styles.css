@@ -2350,3 +2350,17 @@ main {
     font-size: 12px;
     color: #7f8c8d;
 }
+
+/* Per-sender unsubscribe affordance in the bundle header */
+.unsub-btn {
+    margin-left: auto;
+    font-size: 12px;
+    padding: 4px 12px;
+}
+
+.unsub-status {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e8449;
+}

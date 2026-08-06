@@ -79,6 +79,7 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
         .route("/emails", get(handlers::list_emails))
         .route("/emails/stats", get(handlers::get_email_stats))
         .route("/emails/:id", get(handlers::get_email))
+        .route("/emails/:id/unsubscribe", post(handlers::unsubscribe_email))
         // Agent decision routes
         .route("/decisions", get(handlers::list_decisions))
         .route("/decisions", post(handlers::create_decision))

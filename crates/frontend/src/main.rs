@@ -2683,6 +2683,8 @@ struct ReviewQueue {
     bundles: Vec<ReviewBundle>,
     /// Bundle keys whose buttons are in the post-failure cooldown
     disabled: std::collections::HashSet<usize>,
+    /// Unsubscribe progress/outcome per bundle key ("..." while in flight)
+    unsub: std::collections::HashMap<usize, String>,
     archive_mode: String,
     loaded: bool,
     banner: Option<String>,
@@ -2712,6 +2714,11 @@ enum ReviewMsg {
     /// Drop a permanently-failing returned bundle without a backend call
     DismissBundle(usize),
     Banner(Option<String>),
+    /// Unsubscribe progress/outcome for a sender bundle
+    UnsubStatus {
+        key: usize,
+        label: String,
+    },
 }
 
 impl Reducible for ReviewQueue {
@@ -2721,6 +2728,7 @@ impl Reducible for ReviewQueue {
         let mut next = ReviewQueue {
             bundles: self.bundles.clone(),
             disabled: self.disabled.clone(),
+            unsub: self.unsub.clone(),
             archive_mode: self.archive_mode.clone(),
             loaded: self.loaded,
             banner: self.banner.clone(),
@@ -2779,6 +2787,9 @@ impl Reducible for ReviewQueue {
                 next.disabled.remove(&key);
             }
             ReviewMsg::Banner(b) => next.banner = b,
+            ReviewMsg::UnsubStatus { key, label } => {
+                next.unsub.insert(key, label);
+            }
         }
         next.into()
     }
@@ -2938,6 +2949,47 @@ fn archive_review_panel() -> Html {
         })
     };
 
+    let on_unsubscribe = {
+        let queue = queue.clone();
+        Callback::from(move |(bundle_key, email_id): (usize, Uuid)| {
+            queue.dispatch(ReviewMsg::UnsubStatus {
+                key: bundle_key,
+                label: "...".to_string(),
+            });
+            let queue = queue.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let label = match Request::post(&format!("/api/emails/{email_id}/unsubscribe"))
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.ok() => {
+                        match resp.json::<shared_types::UnsubscribeResponse>().await {
+                            Ok(out) => match out.method.as_str() {
+                                "one_click" => "Unsubscribed".to_string(),
+                                "mailto" => "Unsubscribe email sent".to_string(),
+                                "link" => {
+                                    if let Some(url) = out.url {
+                                        let _ = gloo::utils::window()
+                                            .open_with_url_and_target(&url, "_blank");
+                                    }
+                                    "Opened unsubscribe page".to_string()
+                                }
+                                _ => "No standard unsubscribe".to_string(),
+                            },
+                            Err(_) => "Failed".to_string(),
+                        }
+                    }
+                    Ok(resp) => format!("Failed ({})", resp.status()),
+                    Err(_) => "Failed".to_string(),
+                };
+                queue.dispatch(ReviewMsg::UnsubStatus {
+                    key: bundle_key,
+                    label,
+                });
+            });
+        })
+    };
+
     let total_emails: usize = queue.bundles.iter().map(|b| b.items.len()).sum();
     let front = queue.bundles.first().cloned();
     let front_disabled = front
@@ -2993,6 +3045,31 @@ fn archive_review_panel() -> Html {
                                             <>
                                                 <span class="bundle-sender-name">{s}</span>
                                                 <span class="bundle-sender-count">{format!("{} emails from this sender", bundle.items.len())}</span>
+                                                {match queue.unsub.get(&bundle_key) {
+                                                    Some(status) if status == "..." => html! {
+                                                        <span class="unsub-status">{"Unsubscribing..."}</span>
+                                                    },
+                                                    Some(status) => html! {
+                                                        <span class="unsub-status">{status.clone()}</span>
+                                                    },
+                                                    None => {
+                                                        let unsub = on_unsubscribe.clone();
+                                                        let email_id = bundle.items.first().map(|i| i.email_id);
+                                                        html! {
+                                                            <button
+                                                                class="btn-secondary unsub-btn"
+                                                                disabled={front_disabled || email_id.is_none()}
+                                                                onclick={Callback::from(move |_| {
+                                                                    if let Some(eid) = email_id {
+                                                                        unsub.emit((bundle_key, eid));
+                                                                    }
+                                                                })}
+                                                            >
+                                                                {"Unsubscribe"}
+                                                            </button>
+                                                        }
+                                                    }
+                                                }}
                                             </>
                                         },
                                         None => html! {

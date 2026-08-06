@@ -442,6 +442,18 @@ pub struct PipelineStatsResponse {
     pub stage_counts: Vec<TriageStageCount>,
 }
 
+/// Outcome of an unsubscribe attempt against an email's List-Unsubscribe
+/// header (RFC 2369 / RFC 8058)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnsubscribeResponse {
+    /// "one_click" (RFC 8058 POST, done), "mailto" (unsubscribe email sent),
+    /// "link" (page needs a human - url carries it), or "none" (no
+    /// standardized mechanism on this email)
+    pub method: String,
+    /// Set when method == "link": open this in a browser
+    pub url: Option<String>,
+}
+
 /// Query parameters for listing emails
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EmailListQuery {
@@ -1169,6 +1181,21 @@ mod serde_roundtrip_tests {
         let parsed = roundtrip(&value);
         assert_eq!(parsed.todo_title, value.todo_title);
         assert_eq!(parsed.priority, value.priority);
+    }
+
+    #[test]
+    fn unsubscribe_response_roundtrips() {
+        let value = UnsubscribeResponse {
+            method: "one_click".to_string(),
+            url: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed, value);
+        let value = UnsubscribeResponse {
+            method: "link".to_string(),
+            url: Some("https://example.com/unsub".to_string()),
+        };
+        assert_eq!(roundtrip(&value), value);
     }
 
     #[test]

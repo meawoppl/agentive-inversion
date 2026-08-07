@@ -8,7 +8,7 @@ use diesel_async::{
     AsyncPgConnection, RunQueryDsl,
 };
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
-use shared_types::{AgentDecision, Category, ChatMessage, DecisionStatus, Todo};
+use shared_types::{AgentDecision, Category, ChatMessage, DecisionStatus, DecisionType, Todo};
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -694,11 +694,15 @@ pub mod decisions {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    /// Proposed decisions awaiting review in the decision inbox. Archive
+    /// proposals are excluded: they have their own review surface (the
+    /// bundled Review tab) and would double-appear here otherwise.
     pub async fn list_pending(conn: &mut AsyncPgConnection) -> anyhow::Result<Vec<AgentDecision>> {
         use crate::schema::agent_decisions::dsl::*;
 
         let rows = agent_decisions
             .filter(status.eq(DecisionStatus::Proposed.as_str()))
+            .filter(decision_type.ne(DecisionType::Archive.as_str()))
             .order_by(created_at.desc())
             .load::<AgentDecisionRow>(conn)
             .await?;
@@ -891,8 +895,11 @@ pub mod decisions {
 
         let total: i64 = agent_decisions.select(count_star()).first(conn).await?;
 
+        // Matches the decision inbox: archive proposals live in the Review
+        // tab and are not counted as inbox-pending
         let pending_count: i64 = agent_decisions
             .filter(status.eq(DecisionStatus::Proposed.as_str()))
+            .filter(decision_type.ne(DecisionType::Archive.as_str()))
             .select(count_star())
             .first(conn)
             .await?;

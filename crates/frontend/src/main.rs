@@ -938,8 +938,22 @@ fn decision_inbox() -> Html {
                         // Get email info if available
                         let email = decision.source_id.and_then(|sid| emails_map.get(&sid));
 
-                        // Parse proposed action
-                        let proposed: Option<ProposedTodoAction> = serde_json::from_value(decision.proposed_action.clone()).ok();
+        // Parse proposed action into the type-appropriate shape so the card
+                        // says what approving actually does, not just a type name
+                        let proposed: Option<ProposedTodoAction> = (decision.decision_type
+                            == "create_todo")
+                            .then(|| serde_json::from_value(decision.proposed_action.clone()).ok())
+                            .flatten();
+                        let proposed_forward: Option<ProposedForwardAction> = (decision
+                            .decision_type
+                            == "forward_email")
+                            .then(|| serde_json::from_value(decision.proposed_action.clone()).ok())
+                            .flatten();
+                        let proposed_event: Option<ProposedCalendarEventAction> = (decision
+                            .decision_type
+                            == "create_calendar_event")
+                            .then(|| serde_json::from_value(decision.proposed_action.clone()).ok())
+                            .flatten();
 
                         html! {
                             <div key={decision.id.to_string()}
@@ -987,7 +1001,20 @@ fn decision_inbox() -> Html {
                                         } else {
                                             html! {}
                                         }}
+                                        {if let Some(fwd) = &proposed_forward {
+                                            html! {
+                                                <span class="proposed-title">{format!(" \u{2192} {}", fwd.to_address)}</span>
+                                            }
+                                        } else {
+                                            html! {}
+                                        }}
                                     </div>
+
+                                    {if let Some(event) = &proposed_event {
+                                        html! { <EventPreviewCard event={event.clone()} compact={true} /> }
+                                    } else {
+                                        html! {}
+                                    }}
 
                                     <div class="decision-reasoning">
                                         {&decision.reasoning}
@@ -1040,6 +1067,73 @@ fn decision_inbox() -> Html {
                             </div>
                         </div>
                     </div>
+                }
+            } else {
+                html! {}
+            }}
+        </div>
+    }
+}
+
+// ============================================================================
+// Calendar Event Preview (gcal-style card for event proposals)
+// ============================================================================
+
+#[derive(Properties, PartialEq, Clone)]
+struct EventPreviewProps {
+    event: ProposedCalendarEventAction,
+    #[prop_or(false)]
+    compact: bool,
+}
+
+#[function_component(EventPreviewCard)]
+fn event_preview_card(props: &EventPreviewProps) -> Html {
+    let e = &props.event;
+    let same_day = e.start.date_naive() == e.end.date_naive();
+    let date_line = if same_day {
+        e.start.format("%A, %B %-d, %Y").to_string()
+    } else {
+        format!(
+            "{} \u{2013} {}",
+            e.start.format("%a %b %-d"),
+            e.end.format("%a %b %-d, %Y")
+        )
+    };
+    let time_line = format!(
+        "{} \u{2013} {} UTC",
+        e.start.format("%H:%M"),
+        e.end.format("%H:%M")
+    );
+
+    html! {
+        <div class={if props.compact { "event-preview event-preview-compact" } else { "event-preview" }}>
+            <div class="event-preview-title">{&e.summary}</div>
+            <div class="event-preview-when">
+                <span>{date_line}</span>
+                <span class="event-preview-time">{time_line}</span>
+            </div>
+            {if let Some(loc) = e.location.as_ref().filter(|l| !l.is_empty()) {
+                html! { <div class="event-preview-location">{"\u{1F4CD} "}{loc}</div> }
+            } else {
+                html! {}
+            }}
+            {if !props.compact {
+                html! {
+                    <>
+                        {if let Some(desc) = e.description.as_ref().filter(|d| !d.is_empty()) {
+                            html! { <div class="event-preview-desc">{desc}</div> }
+                        } else {
+                            html! {}
+                        }}
+                        <div class="event-preview-meta">
+                            <span>{format!("Calendar: {}", e.calendar_name.clone().unwrap_or_else(|| "Agent".to_string()))}</span>
+                            {if let Some(link) = &e.email_link {
+                                html! { <a href={link.clone()} target="_blank" rel="noopener">{"Source email"}</a> }
+                            } else {
+                                html! {}
+                            }}
+                        </div>
+                    </>
                 }
             } else {
                 html! {}
@@ -1103,26 +1197,7 @@ fn decision_detail_view(props: &DecisionDetailProps) -> Html {
                 html! {
                     <div class="detail-section">
                         <h4>{"Proposed Calendar Event"}</h4>
-                        <p><strong>{"Summary: "}</strong>{&event.summary}</p>
-                        <p><strong>{"When: "}</strong>{format!("{} \u{2192} {}",
-                            event.start.format("%a %b %-d, %H:%M"),
-                            event.end.format("%H:%M UTC"))}</p>
-                        {if let Some(loc) = &event.location {
-                            html! { <p><strong>{"Where: "}</strong>{loc}</p> }
-                        } else {
-                            html! {}
-                        }}
-                        {if let Some(desc) = &event.description {
-                            html! { <p><strong>{"Details: "}</strong>{desc}</p> }
-                        } else {
-                            html! {}
-                        }}
-                        <p><strong>{"Calendar: "}</strong>{event.calendar_name.clone().unwrap_or_else(|| "Agent".to_string())}</p>
-                        {if let Some(link) = &event.email_link {
-                            html! { <p><a href={link.clone()} target="_blank">{"Source email"}</a></p> }
-                        } else {
-                            html! {}
-                        }}
+                        <EventPreviewCard event={event} />
                         <p class="gate-note">{"Approving creates this event on your Agent calendar."}</p>
                     </div>
                 }

@@ -621,6 +621,166 @@ main {
     background-color: #c0392b;
 }
 
+/* Type filter chips over the pending backlog */
+.inbox-filters {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background-color: #ecf0f1;
+    color: #2c3e50;
+    border: 1px solid #bdc3c7;
+    border-radius: 16px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.filter-chip:hover {
+    background-color: #d5dbdb;
+}
+
+.filter-chip.active {
+    background-color: #3498db;
+    border-color: #2980b9;
+    color: #fff;
+}
+
+.filter-chip-count {
+    background-color: rgba(0, 0, 0, 0.12);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 12px;
+}
+
+/* Page controls, repeated above and below long lists */
+.pager {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 0;
+}
+
+.pager-position {
+    color: #7f8c8d;
+    font-size: 13px;
+}
+
+.pager button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+/* Pending decisions collapsed by sender and proposed action */
+.decision-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.decision-group {
+    border: 1px solid #e1e5e8;
+    border-radius: 6px;
+    background-color: #fff;
+    overflow: hidden;
+}
+
+.decision-group-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background-color: #f4f7f9;
+    cursor: pointer;
+}
+
+.decision-group-header:hover {
+    background-color: #eaf0f4;
+}
+
+.decision-group-header input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.decision-group-title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.group-sender {
+    font-weight: 600;
+    color: #2c3e50;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.group-type {
+    font-size: 12px;
+    color: #2980b9;
+    background-color: #e8f4fd;
+    border-radius: 10px;
+    padding: 2px 8px;
+    white-space: nowrap;
+}
+
+.group-address {
+    font-size: 12px;
+    color: #7f8c8d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.group-count {
+    font-weight: 600;
+    color: #fff;
+    background-color: #7f8c8d;
+    border-radius: 10px;
+    padding: 1px 9px;
+    font-size: 12px;
+}
+
+.decision-group-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.decision-group .decision-list {
+    padding: 12px 16px 16px;
+}
+
+.decision-group-preview {
+    padding: 8px 16px 12px 46px;
+    color: #7f8c8d;
+    font-size: 13px;
+}
+
+.group-preview-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 1px 0;
+}
+
+.group-preview-more {
+    padding-top: 4px;
+    font-style: italic;
+}
+
 .decision-list {
     display: flex;
     flex-direction: column;
@@ -953,6 +1113,32 @@ main {
     border: 1px solid #ddd;
     border-radius: 4px;
     font-size: 14px;
+}
+
+.log-day {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.log-day-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #e1e5e8;
+}
+
+.log-day-label {
+    font-weight: 600;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+.log-day-count {
+    color: #7f8c8d;
+    font-size: 12px;
 }
 
 .log-list {

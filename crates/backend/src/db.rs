@@ -425,6 +425,24 @@ pub mod emails {
         Ok(items)
     }
 
+    /// Sender identity for a set of emails. Narrow on purpose: the inbox
+    /// groups the whole pending backlog by sender, and whole `Email` rows
+    /// carry bodies that only the visible page needs.
+    pub async fn list_senders_by_ids(
+        conn: &mut AsyncPgConnection,
+        ids: &[Uuid],
+    ) -> anyhow::Result<Vec<(Uuid, String, Option<String>)>> {
+        use crate::schema::emails::dsl::*;
+
+        let items = emails
+            .filter(id.eq_any(ids))
+            .select((id, from_address, from_name))
+            .load::<(Uuid, String, Option<String>)>(conn)
+            .await?;
+
+        Ok(items)
+    }
+
     /// List emails in a given triage state, oldest first
     pub async fn list_by_triage_status(
         conn: &mut AsyncPgConnection,
@@ -708,6 +726,130 @@ pub mod decisions {
             .await?;
 
         Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    /// Grouping key for one pending decision. Narrow on purpose: the whole
+    /// backlog is scanned to build the group index, and `proposed_action` /
+    /// `reasoning` are large text columns that only the visible page needs.
+    pub struct PendingKey {
+        pub id: Uuid,
+        pub source_id: Option<Uuid>,
+        pub decision_type: String,
+        pub created_at: DateTime<Utc>,
+    }
+
+    /// Every pending decision reduced to its grouping key, newest first.
+    /// Same filter as [`list_pending`] plus an optional decision_type.
+    pub async fn list_pending_keys(
+        conn: &mut AsyncPgConnection,
+        decision_type_filter: Option<&str>,
+    ) -> anyhow::Result<Vec<PendingKey>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let mut query = agent_decisions
+            .filter(status.eq(DecisionStatus::Proposed.as_str()))
+            .filter(decision_type.ne(DecisionType::Archive.as_str()))
+            .into_boxed();
+
+        if let Some(t) = decision_type_filter {
+            query = query.filter(decision_type.eq(t.to_string()));
+        }
+
+        let rows = query
+            .select((id, source_id, decision_type, created_at))
+            .order_by(created_at.desc())
+            .load::<(Uuid, Option<Uuid>, String, DateTime<Utc>)>(conn)
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(row_id, row_source, row_type, row_created)| PendingKey {
+                id: row_id,
+                source_id: row_source,
+                decision_type: row_type,
+                created_at: row_created,
+            })
+            .collect())
+    }
+
+    /// Pending count per decision_type, for the inbox's type filter
+    pub async fn count_pending_by_type(
+        conn: &mut AsyncPgConnection,
+    ) -> anyhow::Result<Vec<(String, i64)>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let rows = agent_decisions
+            .filter(status.eq(DecisionStatus::Proposed.as_str()))
+            .filter(decision_type.ne(DecisionType::Archive.as_str()))
+            .group_by(decision_type)
+            .select((decision_type, diesel::dsl::count_star()))
+            .load::<(String, i64)>(conn)
+            .await?;
+
+        Ok(rows)
+    }
+
+    /// Load a set of decisions by primary key, in unspecified order
+    pub async fn list_by_ids(
+        conn: &mut AsyncPgConnection,
+        ids: &[Uuid],
+    ) -> anyhow::Result<Vec<AgentDecision>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let rows = agent_decisions
+            .filter(id.eq_any(ids))
+            .load::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    /// One page of the decision log, newest first
+    pub async fn list_page(
+        conn: &mut AsyncPgConnection,
+        status_filter: Option<&str>,
+        source_type_filter: Option<&str>,
+        limit_val: i64,
+        offset_val: i64,
+    ) -> anyhow::Result<Vec<AgentDecision>> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let mut query = agent_decisions.into_boxed();
+        if let Some(s) = status_filter {
+            query = query.filter(status.eq(s.to_string()));
+        }
+        if let Some(s) = source_type_filter {
+            query = query.filter(source_type.eq(s.to_string()));
+        }
+
+        let rows = query
+            .order_by(created_at.desc())
+            .limit(limit_val)
+            .offset(offset_val)
+            .load::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    /// Total decisions matching the same filters as [`list_page`]
+    pub async fn count_matching(
+        conn: &mut AsyncPgConnection,
+        status_filter: Option<&str>,
+        source_type_filter: Option<&str>,
+    ) -> anyhow::Result<i64> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let mut query = agent_decisions.into_boxed();
+        if let Some(s) = status_filter {
+            query = query.filter(status.eq(s.to_string()));
+        }
+        if let Some(s) = source_type_filter {
+            query = query.filter(source_type.eq(s.to_string()));
+        }
+
+        let total = query.count().get_result::<i64>(conn).await?;
+        Ok(total)
     }
 
     /// List still-proposed decisions of one type, newest first. The review

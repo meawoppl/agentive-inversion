@@ -51,6 +51,13 @@ This is a Rust workspace with 3 crates:
   `memory-serve`'s `load_assets!` reads it at compile time. Run
   `cd crates/frontend && trunk build` first; CI does this before clippy and
   test
+- **Rebuild the backend after every `trunk build`.** The asset manifest is
+  baked in at compile time, so a backend binary built against an older `dist`
+  serves the SPA fallback for the new hashed asset names. The browser then
+  rejects `index.html`-as-JS on the subresource-integrity check and renders a
+  blank page with no visible error except an SRI digest mismatch in the
+  console. Symptom to recognise: identical computed SHA-384 digests reported
+  for the .js and the .css
 
 ### Static Asset Serving
 Use **`memory-serve`** for embedding and serving the frontend in the axum
@@ -180,6 +187,24 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
 - Receipt forwarding is gated: screening proposes `forward_email` decisions for receipts; approval forwards the original as an RFC 822 attachment from the account it landed in (destination is server policy: `TRIAGE_FORWARD_TO`, default receipts@ramp.com — agents never choose destinations), then labels `agent-forwarded` and archives
 - Requires the `claude` binary plus a credential (DB-stored login token preferred, `ANTHROPIC_API_KEY` env fallback); otherwise mode=disabled and emails simply stay pending — there is no other classifier (the old keyword/rule system was removed 2026-08-04)
 - Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them
+
+### Decision Review Surfaces
+- The pending backlog runs to four figures, so neither review surface ships it
+  whole. `GET /api/decisions/pending` returns a `PendingDecisionsResponse`:
+  pending decisions collapsed into (decision_type, sender) groups, one page of
+  groups per request, each item already carrying its source email. Do not
+  reintroduce a per-decision `GET /api/emails/{id}` from the browser — that
+  N+1 was #117
+- `GET /api/decisions` returns a paginated `DecisionLogResponse`, not a bare
+  array. Both endpoints take `page` / `page_size`; the server clamps them
+- Grouping is a pure function in `crates/backend/src/services/inbox.rs` so it
+  is unit-testable without a database. Only the visible page is hydrated with
+  reasoning, proposed actions and email context — the grouping pass selects
+  narrow key columns over the whole backlog
+- Groups sort largest-first: the biggest group is the most backlog one
+  judgement can clear. A group of one renders as a bare row in the UI
+- Archive proposals stay excluded from the inbox; they have their own bundled
+  Review tab
 
 ## Environment Variables
 

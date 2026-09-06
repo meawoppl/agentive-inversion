@@ -2,7 +2,7 @@ use axum::{
     extract::{Json, Path, Query, State},
     http::StatusCode,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use shared_types::{
     AboutMeResponse, AgentDecisionResponse, ApproveDecisionRequest, ArchiveReviewItem,
     ArchiveReviewResponse, BatchApproveDecisionsRequest, BatchOperationFailure,
@@ -10,8 +10,10 @@ use shared_types::{
     Category, ChatHistoryQuery, ChatIntent, ChatMessageResponse, ChatResponse,
     ClaudeAuthCompleteRequest, ClaudeAuthStartResponse, ClaudeAuthStatusResponse,
     CreateAgentDecisionRequest, CreateCalendarEventRequest, CreateCalendarEventResponse,
-    CreateCategoryRequest, CreateTodoRequest, DecisionStats, EmailListQuery, EmailResponse,
-    GoogleAccountResponse, PipelineStatsResponse, RejectDecisionRequest, SendChatMessageRequest,
+    CreateCategoryRequest, CreateTodoRequest, DecisionEmailContext, DecisionLogQuery,
+    DecisionLogResponse, DecisionStats, DecisionTypeCount, EmailListQuery, EmailResponse,
+    GoogleAccountResponse, PendingDecisionGroup, PendingDecisionItem, PendingDecisionsQuery,
+    PendingDecisionsResponse, PipelineStatsResponse, RejectDecisionRequest, SendChatMessageRequest,
     SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse, TriageStageCount,
     UpdateAboutMeRequest, UpdateCategoryRequest, UpdateTodoRequest,
 };
@@ -23,6 +25,7 @@ use crate::db::{
     google_accounts, todos,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::services::inbox::{self, GroupInput};
 use crate::services::DecisionService;
 use crate::AppState;
 
@@ -573,37 +576,172 @@ pub async fn get_archive_review(
 // Agent Decision handlers
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
-pub struct DecisionListParams {
-    pub status: Option<String>,
-    pub source_type: Option<String>,
-}
+/// Groups per page, and the ceiling a caller can ask for. The inbox exists to
+/// burn down a four-figure backlog; a page is a sitting's worth of work, not
+/// the whole queue.
+const INBOX_DEFAULT_PAGE_SIZE: i64 = 20;
+const INBOX_MAX_PAGE_SIZE: i64 = 100;
+
+/// Decision-log rows per page
+const LOG_DEFAULT_PAGE_SIZE: i64 = 50;
+const LOG_MAX_PAGE_SIZE: i64 = 200;
 
 pub async fn list_decisions(
     State(state): State<AppState>,
-    Query(params): Query<DecisionListParams>,
-) -> ApiResult<Json<Vec<AgentDecisionResponse>>> {
+    Query(params): Query<DecisionLogQuery>,
+) -> ApiResult<Json<DecisionLogResponse>> {
     let mut conn = state.pool.get().await?;
 
-    let items = if let Some(status) = params.status {
-        decisions::list_by_status(&mut conn, &status).await?
-    } else if let Some(source_type) = params.source_type {
-        decisions::list_by_source(&mut conn, &source_type).await?
-    } else {
-        decisions::list_all(&mut conn).await?
-    };
+    let status = params.status.as_deref().filter(|s| *s != "all");
+    let source_type = params.source_type.as_deref().filter(|s| *s != "all");
+    let page_size =
+        inbox::clamp_page_size(params.page_size, LOG_DEFAULT_PAGE_SIZE, LOG_MAX_PAGE_SIZE);
+    let page = inbox::clamp_page(params.page);
 
-    let responses: Vec<AgentDecisionResponse> = items.into_iter().map(Into::into).collect();
-    Ok(Json(responses))
+    let total = decisions::count_matching(&mut conn, status, source_type).await?;
+    let items =
+        decisions::list_page(&mut conn, status, source_type, page_size, page * page_size).await?;
+
+    Ok(Json(DecisionLogResponse {
+        items: items.into_iter().map(Into::into).collect(),
+        page,
+        page_size,
+        total,
+    }))
 }
 
+/// The decision inbox: pending decisions collapsed into (action, sender)
+/// groups, one page of groups per request.
+///
+/// Everything the inbox renders — including each decision's source email —
+/// ships in this one response. The browser used to fetch `/api/emails/{id}`
+/// once per decision, which at a four-figure backlog meant a thousand serial
+/// round trips before the first row appeared (#117).
 pub async fn list_pending_decisions(
     State(state): State<AppState>,
-) -> ApiResult<Json<Vec<AgentDecisionResponse>>> {
+    Query(params): Query<PendingDecisionsQuery>,
+) -> ApiResult<Json<PendingDecisionsResponse>> {
     let mut conn = state.pool.get().await?;
-    let items = decisions::list_pending(&mut conn).await?;
-    let responses: Vec<AgentDecisionResponse> = items.into_iter().map(Into::into).collect();
-    Ok(Json(responses))
+
+    // Counts cover the whole backlog, not the filtered slice, so the type
+    // filter can show what selecting each type would yield
+    let mut type_counts: Vec<DecisionTypeCount> = decisions::count_pending_by_type(&mut conn)
+        .await?
+        .into_iter()
+        .map(|(decision_type, count)| DecisionTypeCount {
+            decision_type,
+            count,
+        })
+        .collect();
+    type_counts.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.decision_type.cmp(&b.decision_type))
+    });
+
+    let type_filter = params.decision_type.as_deref().filter(|t| *t != "all");
+    let page_size = inbox::clamp_page_size(
+        params.page_size,
+        INBOX_DEFAULT_PAGE_SIZE,
+        INBOX_MAX_PAGE_SIZE,
+    );
+    let page = inbox::clamp_page(params.page);
+
+    // Grouping needs every pending row, but only its key columns: id, type,
+    // timestamp, and the sender of its source email
+    let keys = decisions::list_pending_keys(&mut conn, type_filter).await?;
+    let total_decisions = keys.len() as i64;
+
+    let source_ids: Vec<Uuid> = keys.iter().filter_map(|k| k.source_id).collect();
+    let senders = emails::list_senders_by_ids(&mut conn, &source_ids).await?;
+    let sender_by_email: std::collections::HashMap<Uuid, (String, Option<String>)> = senders
+        .into_iter()
+        .map(|(email_id, address, name)| (email_id, (address, name)))
+        .collect();
+
+    let groups = inbox::group_pending(
+        keys.into_iter()
+            .map(|k| {
+                let sender = k.source_id.and_then(|sid| sender_by_email.get(&sid));
+                GroupInput {
+                    id: k.id,
+                    decision_type: k.decision_type,
+                    sender_address: sender.map(|(address, _)| address.clone()),
+                    sender_name: sender.and_then(|(_, name)| name.clone()),
+                    created_at: k.created_at,
+                }
+            })
+            .collect(),
+    );
+    let total_groups = groups.len() as i64;
+
+    // Only the visible page gets hydrated with reasoning, proposed actions
+    // and email context
+    let page_groups: Vec<_> = groups
+        .into_iter()
+        .skip((page * page_size) as usize)
+        .take(page_size as usize)
+        .collect();
+
+    let page_decision_ids: Vec<Uuid> = page_groups
+        .iter()
+        .flat_map(|g| g.decision_ids.iter().copied())
+        .collect();
+    let hydrated = decisions::list_by_ids(&mut conn, &page_decision_ids).await?;
+    let by_id: std::collections::HashMap<Uuid, AgentDecisionResponse> = hydrated
+        .into_iter()
+        .map(|d| (d.id, AgentDecisionResponse::from(d)))
+        .collect();
+
+    let page_email_ids: Vec<Uuid> = by_id.values().filter_map(|d| d.source_id).collect();
+    let page_emails = emails::list_by_ids(&mut conn, &page_email_ids).await?;
+    let email_by_id: std::collections::HashMap<Uuid, DecisionEmailContext> = page_emails
+        .into_iter()
+        .map(|e| {
+            (
+                e.id,
+                DecisionEmailContext {
+                    email_id: e.id,
+                    subject: e.subject,
+                    from_address: e.from_address,
+                    from_name: e.from_name,
+                    snippet: e.snippet,
+                    received_at: e.received_at,
+                },
+            )
+        })
+        .collect();
+
+    let groups = page_groups
+        .into_iter()
+        .map(|g| PendingDecisionGroup {
+            key: g.key,
+            decision_type: g.decision_type,
+            sender_address: g.sender_address,
+            sender_name: g.sender_name,
+            latest_at: g.latest_at,
+            items: g
+                .decision_ids
+                .iter()
+                .filter_map(|id| by_id.get(id).cloned())
+                .map(|decision| PendingDecisionItem {
+                    email: decision
+                        .source_id
+                        .and_then(|sid| email_by_id.get(&sid).cloned()),
+                    decision,
+                })
+                .collect(),
+        })
+        .collect();
+
+    Ok(Json(PendingDecisionsResponse {
+        groups,
+        page,
+        page_size,
+        total_groups,
+        total_decisions,
+        type_counts,
+    }))
 }
 
 pub async fn get_decision(

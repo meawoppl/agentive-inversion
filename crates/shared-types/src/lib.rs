@@ -735,6 +735,94 @@ pub struct DecisionStats {
 }
 
 // ============================================================================
+// Grouped, paginated decision surfaces
+// ============================================================================
+
+/// Email context the inbox renders next to a decision. Resolved server-side
+/// so the inbox never issues a fetch per decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionEmailContext {
+    pub email_id: Uuid,
+    pub subject: String,
+    pub from_address: String,
+    pub from_name: Option<String>,
+    pub snippet: Option<String>,
+    pub received_at: DateTime<Utc>,
+}
+
+/// A pending decision together with the email it came from
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingDecisionItem {
+    pub decision: AgentDecisionResponse,
+    pub email: Option<DecisionEmailContext>,
+}
+
+/// Pending decisions that share a proposed action and a sender, so one
+/// judgement clears the whole batch
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingDecisionGroup {
+    /// Stable identity across pages: `<decision_type>|<sender_address>`
+    pub key: String,
+    pub decision_type: String,
+    /// The from-address shared by every item, absent for non-email sources
+    pub sender_address: Option<String>,
+    pub sender_name: Option<String>,
+    /// Newest decision in the group, used for ordering and display
+    pub latest_at: DateTime<Utc>,
+    pub items: Vec<PendingDecisionItem>,
+}
+
+/// One decision_type present in the pending backlog
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionTypeCount {
+    pub decision_type: String,
+    pub count: i64,
+}
+
+/// One page of grouped pending decisions
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingDecisionsResponse {
+    pub groups: Vec<PendingDecisionGroup>,
+    /// 0-based page of groups
+    pub page: i64,
+    pub page_size: i64,
+    /// Groups matching the filter, across every page
+    pub total_groups: i64,
+    /// Decisions matching the filter, across every page
+    pub total_decisions: i64,
+    /// Counts for the whole pending backlog, ignoring `decision_type`, so
+    /// the type filter can render without a second request
+    pub type_counts: Vec<DecisionTypeCount>,
+}
+
+/// Query parameters for the grouped pending inbox
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PendingDecisionsQuery {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+    pub decision_type: Option<String>,
+}
+
+/// Query parameters for the decision log
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecisionLogQuery {
+    pub status: Option<String>,
+    pub source_type: Option<String>,
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+}
+
+/// One page of the decision log, newest first
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionLogResponse {
+    pub items: Vec<AgentDecisionResponse>,
+    pub page: i64,
+    pub page_size: i64,
+    /// Decisions matching the filter, across every page
+    pub total: i64,
+}
+
+// ============================================================================
 // Chat Types
 // ============================================================================
 
@@ -1211,6 +1299,103 @@ mod serde_roundtrip_tests {
         let parsed = roundtrip(&value);
         assert_eq!(parsed.total, value.total);
         assert_eq!(parsed.average_confidence, value.average_confidence);
+    }
+
+    fn sample_decision() -> AgentDecisionResponse {
+        AgentDecisionResponse {
+            id: Uuid::new_v4(),
+            source_type: "email".to_string(),
+            source_id: Some(Uuid::new_v4()),
+            source_external_id: Some("gmail-123".to_string()),
+            decision_type: "create_todo".to_string(),
+            proposed_action: serde_json::json!({ "todo_title": "Renew passport" }),
+            reasoning: "Deadline named in the body".to_string(),
+            reasoning_details: None,
+            confidence: 0.91,
+            confidence_level: "high".to_string(),
+            status: "proposed".to_string(),
+            result_todo_id: None,
+            user_feedback: None,
+            created_at: Utc::now(),
+            reviewed_at: None,
+            executed_at: None,
+        }
+    }
+
+    #[test]
+    fn decision_email_context_roundtrips() {
+        let value = DecisionEmailContext {
+            email_id: Uuid::new_v4(),
+            subject: "Your statement is ready".to_string(),
+            from_address: "no-reply@bank.example".to_string(),
+            from_name: Some("Example Bank".to_string()),
+            snippet: Some("View your February statement".to_string()),
+            received_at: Utc::now(),
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn pending_decisions_response_roundtrips() {
+        let value = PendingDecisionsResponse {
+            groups: vec![PendingDecisionGroup {
+                key: "create_todo|no-reply@bank.example".to_string(),
+                decision_type: "create_todo".to_string(),
+                sender_address: Some("no-reply@bank.example".to_string()),
+                sender_name: Some("Example Bank".to_string()),
+                latest_at: Utc::now(),
+                items: vec![PendingDecisionItem {
+                    decision: sample_decision(),
+                    email: None,
+                }],
+            }],
+            page: 2,
+            page_size: 20,
+            total_groups: 91,
+            total_decisions: 1181,
+            type_counts: vec![DecisionTypeCount {
+                decision_type: "create_todo".to_string(),
+                count: 1181,
+            }],
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn pending_decisions_query_roundtrips() {
+        let value = PendingDecisionsQuery {
+            page: Some(3),
+            page_size: Some(20),
+            decision_type: Some("forward_email".to_string()),
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.page, value.page);
+        assert_eq!(parsed.page_size, value.page_size);
+        assert_eq!(parsed.decision_type, value.decision_type);
+    }
+
+    #[test]
+    fn decision_log_response_roundtrips() {
+        let value = DecisionLogResponse {
+            items: vec![sample_decision()],
+            page: 0,
+            page_size: 50,
+            total: 4200,
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn decision_log_query_roundtrips() {
+        let value = DecisionLogQuery {
+            status: Some("approved".to_string()),
+            source_type: None,
+            page: Some(1),
+            page_size: None,
+        };
+        let parsed = roundtrip(&value);
+        assert_eq!(parsed.status, value.status);
+        assert_eq!(parsed.page, value.page);
     }
 
     #[test]

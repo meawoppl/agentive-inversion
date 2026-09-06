@@ -247,7 +247,7 @@ pub async fn create_calendar_event(
     State(state): State<AppState>,
     Json(req): Json<CreateCalendarEventRequest>,
 ) -> ApiResult<Json<CreateCalendarEventResponse>> {
-    use crate::calendar_writer::{CalendarWriter, NewCalendarEvent};
+    use crate::calendar_client::{CalendarClient, NewCalendarEvent};
 
     let mut conn = get_conn(&state.pool).await?;
     let account = google_accounts::get_by_email(&mut conn, &req.account_email)
@@ -257,17 +257,17 @@ pub async fn create_calendar_event(
         })?;
     drop(conn);
 
-    let writer = CalendarWriter::from_account(&account)
+    let client = CalendarClient::from_account(&account)
         .await
         .map_err(ApiError::Internal)?;
 
     let calendar_name = req.calendar_name.as_deref().unwrap_or("Agent");
-    let calendar_id = writer
+    let calendar_id = client
         .ensure_calendar(calendar_name)
         .await
         .map_err(ApiError::Internal)?;
 
-    let created = writer
+    let created = client
         .create_event(
             &calendar_id,
             NewCalendarEvent {

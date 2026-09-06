@@ -184,6 +184,22 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
 - Agents act ONLY through the `agent-cli` binary -> REST API (`POST /api/triage/decisions`); never give agents direct DB access
 - INVARIANT: ingestion is never gated on triage; Anthropic/API failures must never touch Gmail-sync health or backoff (separate failure domains)
 - Calendar writes are gated: agents propose `create_calendar_event` decisions; approval executes to the "Agent" calendar
+- Event proposals are screened against the real calendars before they reach
+  the review inbox. `services/calendar_dedupe.rs` reads every calendar of
+  every connected account around the proposed time and drops the proposal if
+  the event is already there — including invitations the user has not
+  answered, and ones they declined. A screened proposal creates no decision;
+  the email gets `triage_status = "event_duplicate"`, which the Pipeline view
+  counts. The check **fails open**: any calendar read error lets the proposal
+  through, because an unreadable calendar cannot prove a duplicate. Disable
+  with `TRIAGE_EVENT_DEDUPE=off`
+- Matching is pure and unit-tested in `calendar_dedupe`; only `find_existing`
+  touches Google. Agents are told not to guess at this themselves — they
+  cannot see the calendars
+- Calendar reads and writes both live in `calendar_client.rs`
+  (`CalendarClient`). The `calendar_events` table is still unpopulated: the
+  calendar poller is a stub, so dedupe queries the Google API live rather
+  than the database
 - Receipt forwarding is gated: screening proposes `forward_email` decisions for receipts; approval forwards the original as an RFC 822 attachment from the account it landed in (destination is server policy: `TRIAGE_FORWARD_TO`, default receipts@ramp.com — agents never choose destinations), then labels `agent-forwarded` and archives
 - Requires the `claude` binary plus a credential (DB-stored login token preferred, `ANTHROPIC_API_KEY` env fallback); otherwise mode=disabled and emails simply stay pending — there is no other classifier (the old keyword/rule system was removed 2026-08-04)
 - Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them

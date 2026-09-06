@@ -118,6 +118,10 @@ Dispositions:
   Only propose events whose date is in the FUTURE relative to today's date
   (given below the emails count). An event, opportunity, or deadline that has
   already passed is an archive candidate, not an event — the moment is gone.
+  Do not try to work out whether the event is already on the user's calendar.
+  You cannot see their calendars; the server checks every one of them and
+  drops proposals that duplicate an existing entry (including invitations
+  they have not answered yet). Propose the event and let that check run.
 - Requires the user to act, reply, decide, or follow up:
   agent-cli decide queue-action --email-id <id> --reasoning "<why>"
 - Personal or potentially important, but nothing to do right now:

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod auth;
-mod calendar_writer;
+mod calendar_client;
 mod config;
 mod db;
 pub mod error;

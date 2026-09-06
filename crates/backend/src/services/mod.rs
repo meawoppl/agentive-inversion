@@ -1,5 +1,6 @@
 //! Business logic services separated from HTTP handling.
 
+pub mod calendar_dedupe;
 pub mod decision;
 pub mod inbox;
 pub mod triage;

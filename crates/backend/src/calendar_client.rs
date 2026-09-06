@@ -1,8 +1,13 @@
-//! Google Calendar event creation using stored OAuth tokens.
+//! Google Calendar reads and writes using stored OAuth tokens.
 //!
 //! Agent-created events land on a dedicated calendar (default "Agent") so
 //! they never pollute the primary calendar and can be toggled or audited
 //! as a group. Events link back to their source email.
+//!
+//! Reads exist to answer one question before a proposal reaches the user:
+//! is this already on a calendar? Most event emails ARE calendar invites,
+//! and Google has usually put them on the calendar before the triage
+//! pipeline ever sees the message.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -14,8 +19,11 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use shared_types::GoogleAccount;
 
-pub struct CalendarWriter {
+pub struct CalendarClient {
     hub: CalendarHub<HttpsConnector<HttpConnector>>,
+    /// Account this client speaks for, carried onto the events it reads so a
+    /// duplicate found across several accounts can name the one it sits on
+    account_email: String,
 }
 
 /// Event to create on the agent calendar
@@ -38,7 +46,7 @@ pub struct CreatedEvent {
     pub calendar_id: String,
 }
 
-impl CalendarWriter {
+impl CalendarClient {
     /// Build a client from a GoogleAccount's stored refresh token
     pub async fn from_account(account: &GoogleAccount) -> Result<Self> {
         let client_id = std::env::var("GOOGLE_CLIENT_ID")
@@ -68,7 +76,10 @@ impl CalendarWriter {
         let client = Client::builder(TokioExecutor::new()).build(connector);
         let hub = CalendarHub::new(client, auth);
 
-        Ok(Self { hub })
+        Ok(Self {
+            hub,
+            account_email: account.email.clone(),
+        })
     }
 
     /// Find a calendar by summary, creating it if missing. Returns its ID.
@@ -154,6 +165,122 @@ impl CalendarWriter {
             google_event_id: created.id.context("Created event has no ID")?,
             html_link: created.html_link,
             calendar_id: calendar_id.to_string(),
+        })
+    }
+
+    /// IDs of every calendar this account can see, including ones the user
+    /// has unchecked in the Google UI. A hidden calendar still holds the
+    /// event, so hiding it must not make a duplicate invisible to us.
+    pub async fn list_calendar_ids(&self) -> Result<Vec<String>> {
+        let (_, list) = self
+            .hub
+            .calendar_list()
+            .list()
+            .show_hidden(true)
+            .doit()
+            .await
+            .context("Failed to list calendars")?;
+
+        Ok(list
+            .items
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| c.deleted != Some(true))
+            .filter_map(|c| c.id)
+            .collect())
+    }
+
+    /// Events on one calendar overlapping [from, to].
+    ///
+    /// `single_events(true)` expands recurrences, so a weekly standup is
+    /// compared as the specific occurrence near the proposal rather than as
+    /// its master record. Cancelled entries are excluded, but invitations the
+    /// user has not answered are NOT — an unanswered invite is still the
+    /// event sitting on their calendar.
+    pub async fn list_events_between(
+        &self,
+        calendar_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<ExistingEvent>> {
+        let (_, list) = self
+            .hub
+            .events()
+            .list(calendar_id)
+            .time_min(from)
+            .time_max(to)
+            .single_events(true)
+            .show_deleted(false)
+            .max_results(EVENT_PAGE_LIMIT)
+            .doit()
+            .await
+            .with_context(|| format!("Failed to list events on calendar {calendar_id}"))?;
+
+        Ok(list
+            .items
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| e.status.as_deref() != Some("cancelled"))
+            .filter_map(|e| ExistingEvent::from_api(&self.account_email, calendar_id, e))
+            .collect())
+    }
+}
+
+/// How many events one calendar-window query returns. The windows queried
+/// here are hours wide, so this is a safety valve, not a paging strategy.
+const EVENT_PAGE_LIMIT: i32 = 250;
+
+/// An event already on one of the user's calendars, reduced to what
+/// duplicate detection compares.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExistingEvent {
+    pub account_email: String,
+    pub calendar_id: String,
+    pub event_id: String,
+    pub summary: String,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    /// Description plus `source.url`, where a link back to the originating
+    /// email would live if the agent created this event
+    pub description: Option<String>,
+    pub source_url: Option<String>,
+    /// The user's own RSVP: "needsAction", "declined", "tentative",
+    /// "accepted", or None when the event has no attendee list
+    pub response_status: Option<String>,
+    pub html_link: Option<String>,
+}
+
+impl ExistingEvent {
+    /// Drop events we cannot compare on time. All-day events carry `date`
+    /// rather than `dateTime`; those are matched on the day they start.
+    fn from_api(account_email: &str, calendar_id: &str, event: Event) -> Option<Self> {
+        let start = event.start.as_ref()?;
+        let end = event.end.as_ref()?;
+        let start_at = start.date_time.or_else(|| {
+            start
+                .date
+                .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc())
+        })?;
+        let end_at = end
+            .date_time
+            .or_else(|| end.date.map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc()))?;
+
+        Some(ExistingEvent {
+            account_email: account_email.to_string(),
+            calendar_id: calendar_id.to_string(),
+            event_id: event.id.unwrap_or_default(),
+            summary: event.summary.unwrap_or_default(),
+            start: start_at,
+            end: end_at,
+            description: event.description,
+            source_url: event.source.and_then(|s| s.url),
+            response_status: event
+                .attendees
+                .unwrap_or_default()
+                .into_iter()
+                .find(|a| a.self_ == Some(true))
+                .and_then(|a| a.response_status),
+            html_link: event.html_link,
         })
     }
 }

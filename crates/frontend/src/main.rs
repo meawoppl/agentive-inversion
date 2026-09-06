@@ -3618,6 +3618,7 @@ fn pipeline_view() -> Html {
         ("archive_candidate", "Awaiting archive determination"),
         ("archived", "Archived by agent"),
         ("event_proposed", "Calendar events proposed"),
+        ("event_duplicate", "Events already on calendar"),
         ("forward_proposed", "Forwards proposed"),
         ("forwarded", "Forwarded"),
         ("action_queued", "Queued for action pass"),

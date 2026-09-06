@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::db::{self, DbPool};
 use crate::pollers::gmail_client::GmailClient;
+use crate::services::calendar_dedupe;
 use shared_types::{
     DecisionStatus, DecisionType, ProposedCalendarEventAction, ProposedForwardAction,
     ProposedTodoAction, TriageDecideAction, TriageDecideRequest, TriageDecideResponse,
@@ -239,6 +240,38 @@ impl TriageService {
                 let account = db::google_accounts::get_by_id(&mut conn, email.account_id)
                     .await
                     .context("Account for email not found")?;
+                let email_link = gmail_permalink(&account.email, &email.gmail_id);
+
+                // Most event emails ARE invitations, and Google has usually
+                // already put them on a calendar. Screen the proposal against
+                // every connected account before it reaches the review inbox.
+                // The pooled connection is released first: this reaches out
+                // to Google and must not hold a slot while it does.
+                drop(conn);
+                let candidate = calendar_dedupe::CandidateEvent {
+                    summary: summary.clone(),
+                    start,
+                    end,
+                    source_link: Some(email_link.clone()),
+                };
+                let existing = calendar_dedupe::find_existing(pool, &candidate).await;
+                let mut conn = pool.get().await.context("Failed to get DB connection")?;
+
+                if let Some(duplicate) = existing {
+                    tracing::info!(
+                        "Event proposal for email {} already on a calendar: {}",
+                        email.id,
+                        duplicate.describe()
+                    );
+                    db::emails::set_triage_status(&mut conn, email.id, "event_duplicate").await?;
+                    db::emails::mark_processed(&mut conn, email.id).await?;
+                    return Ok(TriageDecideResponse {
+                        email_id: email.id,
+                        decision_id: None,
+                        triage_status: "event_duplicate".to_string(),
+                        executed: false,
+                    });
+                }
 
                 let action = ProposedCalendarEventAction {
                     account_email: account.email.clone(),
@@ -247,7 +280,7 @@ impl TriageService {
                     location,
                     start,
                     end,
-                    email_link: Some(gmail_permalink(&account.email, &email.gmail_id)),
+                    email_link: Some(email_link),
                     calendar_name: Some(AGENT_CALENDAR_NAME.to_string()),
                 };
 
@@ -384,7 +417,7 @@ impl TriageService {
     /// Execute an approved calendar-event decision (the gated half of the
     /// event flow). Returns the created event's ID.
     pub async fn execute_calendar_decision(pool: &DbPool, decision_id: Uuid) -> Result<String> {
-        use crate::calendar_writer::{CalendarWriter, NewCalendarEvent};
+        use crate::calendar_client::{CalendarClient, NewCalendarEvent};
 
         let mut conn = pool.get().await.context("Failed to get DB connection")?;
 
@@ -401,14 +434,14 @@ impl TriageService {
             .context("Account for calendar decision not found")?;
         drop(conn);
 
-        let writer = CalendarWriter::from_account(&account).await?;
+        let client = CalendarClient::from_account(&account).await?;
         let calendar_name = action
             .calendar_name
             .as_deref()
             .unwrap_or(AGENT_CALENDAR_NAME);
-        let calendar_id = writer.ensure_calendar(calendar_name).await?;
+        let calendar_id = client.ensure_calendar(calendar_name).await?;
 
-        let created = writer
+        let created = client
             .create_event(
                 &calendar_id,
                 NewCalendarEvent {

@@ -659,6 +659,40 @@ main {
     font-size: 12px;
 }
 
+/* Queue-wide maintenance actions, above the groups they act on */
+.inbox-tools {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.inbox-tools button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.rescan-result {
+    background-color: #f4f7f9;
+    border: 1px solid #e1e5e8;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 13px;
+    max-width: 100%;
+}
+
+.rescan-summary {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.rescan-detail {
+    color: #7f8c8d;
+    padding-top: 4px;
+    word-break: break-word;
+}
+
 /* Page controls, repeated above and below long lists */
 .pager {
     display: flex;
@@ -1127,6 +1161,15 @@ main {
     border: 1px solid #ddd;
     border-radius: 4px;
     font-size: 14px;
+}
+
+.log-item.status-withdrawn {
+    border-left-color: #95a5a6;
+}
+
+.status-badge.status-withdrawn {
+    background-color: #eceff1;
+    color: #607d8b;
 }
 
 .log-day {

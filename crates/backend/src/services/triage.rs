@@ -5,6 +5,7 @@
 //! todos land as proposed decisions gated on human approval.
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -46,6 +47,40 @@ pub fn gmail_permalink(account_email: &str, gmail_id: &str) -> String {
     format!("https://mail.google.com/mail/u/{account_email}/#all/{gmail_id}")
 }
 
+/// How long after its start an event is still treated as current. Agents
+/// infer times loosely and time zones drift, so something that began a few
+/// hours ago may well still be running.
+const PAST_EVENT_GRACE_HOURS: i64 = 6;
+
+/// Turn a proposal for an event that has already happened into an archive.
+///
+/// The moment is gone, so there is nothing to put on a calendar and nothing
+/// for the user to approve — but the email is still worth clearing out of the
+/// inbox. Routing it through the archive disposition means it honours
+/// TRIAGE_ARCHIVE_MODE like any other archive: a gated proposal in the
+/// default dry-run mode, and labelled and recoverable in Gmail either way.
+///
+/// Returns the action to apply and the reasoning to record with it.
+fn redirect_past_events(
+    action: TriageDecideAction,
+    reasoning: String,
+    now: DateTime<Utc>,
+) -> (TriageDecideAction, String) {
+    let TriageDecideAction::Event { start, .. } = &action else {
+        return (action, reasoning);
+    };
+    let start = *start;
+    if start >= now - Duration::hours(PAST_EVENT_GRACE_HOURS) {
+        return (action, reasoning);
+    }
+
+    let note = format!(
+        "{reasoning} [Archived rather than proposed: the event started {}, already past.]",
+        start.to_rfc3339()
+    );
+    (TriageDecideAction::Archive, note)
+}
+
 pub struct TriageService;
 
 impl TriageService {
@@ -63,7 +98,12 @@ impl TriageService {
             .as_ref()
             .map(|m| json!({ "llm_analysis": format!("model: {m}") }).to_string());
 
-        match req.action {
+        // An event that has already happened is not calendar material. The
+        // screening prompt says so, but agents misjudge dates, so the server
+        // enforces it rather than filling the review queue with last month.
+        let (action, reasoning) = redirect_past_events(req.action, req.reasoning, Utc::now());
+
+        match action {
             TriageDecideAction::ArchiveCandidate => {
                 db::emails::set_triage_status(&mut conn, email.id, "archive_candidate").await?;
                 Ok(TriageDecideResponse {
@@ -93,7 +133,7 @@ impl TriageService {
                     Some(&email.gmail_id),
                     DecisionType::Ignore.as_str(),
                     "{}",
-                    &req.reasoning,
+                    &reasoning,
                     reasoning_details.as_deref(),
                     0.9,
                     DecisionStatus::AutoApproved.as_str(),
@@ -138,7 +178,7 @@ impl TriageService {
                     Some(&email.gmail_id),
                     DecisionType::ForwardEmail.as_str(),
                     &serde_json::to_string(&action)?,
-                    &req.reasoning,
+                    &reasoning,
                     reasoning_details.as_deref(),
                     0.9,
                     DecisionStatus::Proposed.as_str(),
@@ -166,7 +206,7 @@ impl TriageService {
                         Some(&email.gmail_id),
                         DecisionType::Archive.as_str(),
                         "{}",
-                        &req.reasoning,
+                        &reasoning,
                         reasoning_details.as_deref(),
                         0.9,
                         DecisionStatus::Proposed.as_str(),
@@ -193,7 +233,7 @@ impl TriageService {
                     Some(&email.gmail_id),
                     DecisionType::Archive.as_str(),
                     "{}",
-                    &req.reasoning,
+                    &reasoning,
                     reasoning_details.as_deref(),
                     0.9,
                     DecisionStatus::AutoApproved.as_str(),
@@ -291,7 +331,7 @@ impl TriageService {
                     Some(&email.gmail_id),
                     DecisionType::CreateCalendarEvent.as_str(),
                     &serde_json::to_string(&action)?,
-                    &req.reasoning,
+                    &reasoning,
                     reasoning_details.as_deref(),
                     0.8,
                     DecisionStatus::Proposed.as_str(),
@@ -327,7 +367,7 @@ impl TriageService {
                     Some(&email.gmail_id),
                     DecisionType::CreateTodo.as_str(),
                     &serde_json::to_string(&action)?,
-                    &req.reasoning,
+                    &reasoning,
                     reasoning_details.as_deref(),
                     0.8,
                     DecisionStatus::Proposed.as_str(),
@@ -472,6 +512,81 @@ mod tests {
         // mode; only the literal "execute" enables Gmail mutation
         std::env::remove_var("TRIAGE_ARCHIVE_MODE");
         assert_eq!(archive_mode(), "propose");
+    }
+
+    fn event_at(start: DateTime<Utc>) -> TriageDecideAction {
+        TriageDecideAction::Event {
+            summary: "Quarterly review".to_string(),
+            start,
+            end: start + Duration::hours(1),
+            description: None,
+            location: None,
+        }
+    }
+
+    #[test]
+    fn a_future_event_is_left_alone() {
+        let now = Utc::now();
+        let (action, reasoning) = redirect_past_events(
+            event_at(now + Duration::days(3)),
+            "Invitation with a date".to_string(),
+            now,
+        );
+        assert!(matches!(action, TriageDecideAction::Event { .. }));
+        assert_eq!(reasoning, "Invitation with a date");
+    }
+
+    #[test]
+    fn an_event_that_has_already_happened_becomes_an_archive() {
+        let now = Utc::now();
+        let (action, reasoning) = redirect_past_events(
+            event_at(now - Duration::days(30)),
+            "Invitation with a date".to_string(),
+            now,
+        );
+        assert!(matches!(action, TriageDecideAction::Archive));
+        // The original reasoning survives, with the redirect recorded
+        assert!(reasoning.starts_with("Invitation with a date"));
+        assert!(reasoning.contains("already past"));
+    }
+
+    #[test]
+    fn an_event_that_started_an_hour_ago_is_still_current() {
+        // It may well still be running; the grace period protects against
+        // loose time inference and time-zone drift
+        let now = Utc::now();
+        let (action, _) = redirect_past_events(
+            event_at(now - Duration::hours(1)),
+            "Invitation".to_string(),
+            now,
+        );
+        assert!(matches!(action, TriageDecideAction::Event { .. }));
+    }
+
+    #[test]
+    fn the_grace_period_ends_and_the_event_archives() {
+        let now = Utc::now();
+        let (action, _) = redirect_past_events(
+            event_at(now - Duration::hours(PAST_EVENT_GRACE_HOURS + 1)),
+            "Invitation".to_string(),
+            now,
+        );
+        assert!(matches!(action, TriageDecideAction::Archive));
+    }
+
+    #[test]
+    fn other_dispositions_pass_through_untouched() {
+        let now = Utc::now();
+        for action in [
+            TriageDecideAction::Archive,
+            TriageDecideAction::Keep,
+            TriageDecideAction::Forward,
+            TriageDecideAction::QueueAction,
+        ] {
+            let (out, reasoning) = redirect_past_events(action, "why".to_string(), now);
+            assert_eq!(reasoning, "why");
+            assert!(!matches!(out, TriageDecideAction::Event { .. }));
+        }
     }
 
     #[test]

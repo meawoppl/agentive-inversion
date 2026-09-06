@@ -1010,6 +1010,28 @@ pub mod decisions {
         Ok(row.into())
     }
 
+    /// Pull a decision out of the review queue by server policy. Unlike
+    /// `mark_rejected` this is not a judgement the user made, so it stays out
+    /// of the rejected bucket; `note` records why.
+    pub async fn mark_withdrawn(
+        conn: &mut AsyncPgConnection,
+        decision_id: Uuid,
+        note: &str,
+    ) -> anyhow::Result<AgentDecision> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let row = diesel::update(agent_decisions.filter(id.eq(decision_id)))
+            .set((
+                status.eq(DecisionStatus::Withdrawn.as_str()),
+                user_feedback.eq(Some(note)),
+                reviewed_at.eq(Some(Utc::now())),
+            ))
+            .get_result::<AgentDecisionRow>(conn)
+            .await?;
+
+        Ok(row.into())
+    }
+
     pub async fn mark_failed(
         conn: &mut AsyncPgConnection,
         decision_id: Uuid,

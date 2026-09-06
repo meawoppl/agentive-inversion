@@ -16,6 +16,10 @@
 
 use chrono::{DateTime, Duration, Utc};
 
+use shared_types::{
+    DecisionType, ProposedCalendarEventAction, RescanEventsResponse, RescanWithdrawal,
+};
+
 use crate::calendar_client::{CalendarClient, ExistingEvent};
 use crate::db::{self, DbPool};
 
@@ -209,27 +213,43 @@ pub fn enabled() -> bool {
 /// rather than silently swallowing the user's events. Errors are logged and
 /// then dropped for the same reason.
 pub async fn find_existing(pool: &DbPool, candidate: &CandidateEvent) -> Option<DuplicateMatch> {
-    if !enabled() {
-        return None;
+    find_existing_bulk(pool, std::slice::from_ref(candidate))
+        .await
+        .into_iter()
+        .next()
+        .flatten()
+}
+
+/// Screen many proposals against the calendars in one sweep, returning a
+/// verdict per candidate in the order given.
+///
+/// The calendars are read once for a window covering every candidate, not
+/// once per candidate: rescanning a queued backlog of fifty proposals is a
+/// handful of API calls rather than several hundred. Fails open exactly as
+/// the single-candidate path does.
+pub async fn find_existing_bulk(
+    pool: &DbPool,
+    candidates: &[CandidateEvent],
+) -> Vec<Option<DuplicateMatch>> {
+    let none = || candidates.iter().map(|_| None).collect::<Vec<_>>();
+
+    if !enabled() || candidates.is_empty() {
+        return none();
     }
 
     let accounts = match load_accounts(pool).await {
         Ok(accounts) => accounts,
         Err(e) => {
             tracing::warn!(
-                "Event dedupe: could not load accounts, letting proposal through: {e:#}"
+                "Event dedupe: could not load accounts, letting proposals through: {e:#}"
             );
-            return None;
+            return none();
         }
     };
 
-    // One window covering both matching rules: the candidate's whole UTC day
-    // (for the identical-title rule) widened by the start tolerance (for the
-    // approximate-time rule, which can cross midnight).
-    let margin = Duration::minutes(START_TOLERANCE_MINUTES);
-    let day_start = candidate.start.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
-    let from = day_start - margin;
-    let to = day_start + Duration::days(1) + margin;
+    let Some((from, to)) = search_window(candidates) else {
+        return none();
+    };
 
     let mut seen: Vec<ExistingEvent> = Vec::new();
     for account in accounts {
@@ -266,12 +286,105 @@ pub async fn find_existing(pool: &DbPool, candidate: &CandidateEvent) -> Option<
         }
     }
 
-    find_duplicate(candidate, &seen)
+    candidates
+        .iter()
+        .map(|candidate| find_duplicate(candidate, &seen))
+        .collect()
+}
+
+/// The calendar window that could hold a duplicate of any of these
+/// candidates: every candidate's whole UTC day (the identical-title rule)
+/// widened by the start tolerance (the approximate-time rule, which can
+/// cross midnight).
+fn search_window(candidates: &[CandidateEvent]) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let margin = Duration::minutes(START_TOLERANCE_MINUTES);
+    let earliest = candidates.iter().map(|c| c.start).min()?;
+    let latest = candidates.iter().map(|c| c.start).max()?;
+
+    let first_day = earliest.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
+    let last_day = latest.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
+
+    Some((first_day - margin, last_day + Duration::days(1) + margin))
 }
 
 async fn load_accounts(pool: &DbPool) -> anyhow::Result<Vec<shared_types::GoogleAccount>> {
     let mut conn = pool.get().await?;
     db::google_accounts::list_all(&mut conn).await
+}
+
+/// How many queued proposals one rescan pass examines. Bounded so a single
+/// button press cannot turn into an unbounded Google crawl; the response
+/// says whether more are waiting.
+pub const RESCAN_BATCH_LIMIT: i64 = 200;
+
+/// Re-screen the event proposals already sitting in the review queue.
+///
+/// The check in the submission path only ever sees new proposals, so
+/// anything queued before it existed — or queued before the user accepted
+/// the invitation — is still there. This applies the same rules to the
+/// backlog, withdrawing (never deleting) what it matches so a wrong call is
+/// reversible.
+pub async fn rescan_queued_proposals(pool: &DbPool) -> anyhow::Result<RescanEventsResponse> {
+    let mut conn = pool.get().await?;
+    let queued = db::decisions::list_proposed_by_type(
+        &mut conn,
+        DecisionType::CreateCalendarEvent.as_str(),
+        RESCAN_BATCH_LIMIT + 1,
+    )
+    .await?;
+    drop(conn);
+
+    let more_remaining = queued.len() as i64 > RESCAN_BATCH_LIMIT;
+    let queued: Vec<_> = queued
+        .into_iter()
+        .take(RESCAN_BATCH_LIMIT as usize)
+        .collect();
+
+    // A proposal whose action will not parse cannot be compared against
+    // anything; leave it in the queue for the user rather than guessing.
+    let mut candidates = Vec::new();
+    let mut decision_ids = Vec::new();
+    for decision in &queued {
+        let Ok(action) =
+            serde_json::from_str::<ProposedCalendarEventAction>(&decision.proposed_action)
+        else {
+            tracing::warn!(
+                "Event rescan: decision {} has an unparseable proposed_action, skipping",
+                decision.id
+            );
+            continue;
+        };
+        candidates.push(CandidateEvent {
+            summary: action.summary,
+            start: action.start,
+            end: action.end,
+            source_link: action.email_link,
+        });
+        decision_ids.push(decision.id);
+    }
+
+    let verdicts = find_existing_bulk(pool, &candidates).await;
+
+    let mut conn = pool.get().await?;
+    let mut details = Vec::new();
+    for ((decision_id, candidate), verdict) in decision_ids.iter().zip(&candidates).zip(verdicts) {
+        let Some(duplicate) = verdict else { continue };
+        let note = format!("Already on the calendar: {}", duplicate.describe());
+        db::decisions::mark_withdrawn(&mut conn, *decision_id, &note).await?;
+        tracing::info!("Event rescan withdrew decision {decision_id}: {note}");
+        details.push(RescanWithdrawal {
+            decision_id: *decision_id,
+            summary: candidate.summary.clone(),
+            matched: duplicate.describe(),
+        });
+    }
+
+    Ok(RescanEventsResponse {
+        checked: candidates.len() as i64,
+        withdrawn: details.len() as i64,
+        details,
+        more_remaining,
+    })
 }
 
 #[cfg(test)]
@@ -306,6 +419,35 @@ mod tests {
             end: at(start) + Duration::hours(1),
             source_link: None,
         }
+    }
+
+    #[test]
+    fn the_search_window_covers_every_candidates_whole_day() {
+        // Two proposals a month apart: one window spans both, from the day
+        // before the first to the day after the last, so neither the
+        // same-day rule nor the cross-midnight tolerance can miss a match.
+        let window = search_window(&[
+            candidate("Later thing", "2026-10-12T15:00:00Z"),
+            candidate("Earlier thing", "2026-09-12T15:00:00Z"),
+        ])
+        .expect("two candidates give a window");
+
+        assert!(window.0 < at("2026-09-12T00:00:00Z"));
+        assert!(window.1 > at("2026-10-13T00:00:00Z"));
+    }
+
+    #[test]
+    fn a_single_candidate_still_gets_its_own_day_plus_margin() {
+        let window = search_window(&[candidate("One thing", "2026-09-12T15:00:00Z")])
+            .expect("one candidate gives a window");
+
+        assert_eq!(window.0, at("2026-09-11T22:00:00Z"));
+        assert_eq!(window.1, at("2026-09-13T02:00:00Z"));
+    }
+
+    #[test]
+    fn no_candidates_means_no_window_to_query() {
+        assert!(search_window(&[]).is_none());
     }
 
     #[test]

@@ -203,32 +203,60 @@ impl CalendarClient {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> Result<Vec<ExistingEvent>> {
-        let (_, list) = self
-            .hub
-            .events()
-            .list(calendar_id)
-            .time_min(from)
-            .time_max(to)
-            .single_events(true)
-            .show_deleted(false)
-            .max_results(EVENT_PAGE_LIMIT)
-            .doit()
-            .await
-            .with_context(|| format!("Failed to list events on calendar {calendar_id}"))?;
+        let mut events = Vec::new();
+        let mut page_token: Option<String> = None;
 
-        Ok(list
-            .items
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|e| e.status.as_deref() != Some("cancelled"))
-            .filter_map(|e| ExistingEvent::from_api(&self.account_email, calendar_id, e))
-            .collect())
+        loop {
+            let mut call = self
+                .hub
+                .events()
+                .list(calendar_id)
+                .time_min(from)
+                .time_max(to)
+                .single_events(true)
+                .show_deleted(false)
+                .max_results(EVENT_PAGE_SIZE);
+            if let Some(token) = &page_token {
+                call = call.page_token(token);
+            }
+
+            let (_, list) = call
+                .doit()
+                .await
+                .with_context(|| format!("Failed to list events on calendar {calendar_id}"))?;
+
+            events.extend(
+                list.items
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|e| e.status.as_deref() != Some("cancelled"))
+                    .filter_map(|e| ExistingEvent::from_api(&self.account_email, calendar_id, e)),
+            );
+
+            // A rescan spans every queued proposal, so the window can be
+            // months wide and a single page will not cover it.
+            page_token = list.next_page_token;
+            if page_token.is_none() || events.len() >= MAX_EVENTS_PER_CALENDAR {
+                if page_token.is_some() {
+                    tracing::warn!(
+                        "Calendar {calendar_id} returned more than {MAX_EVENTS_PER_CALENDAR} \
+                         events in the window; duplicate detection saw only the first page(s)"
+                    );
+                }
+                break;
+            }
+        }
+
+        Ok(events)
     }
 }
 
-/// How many events one calendar-window query returns. The windows queried
-/// here are hours wide, so this is a safety valve, not a paging strategy.
-const EVENT_PAGE_LIMIT: i32 = 250;
+/// Events per API page
+const EVENT_PAGE_SIZE: i32 = 250;
+
+/// Ceiling on how much of one calendar a single window pulls in. A busy
+/// calendar over a months-wide rescan window would otherwise page forever.
+const MAX_EVENTS_PER_CALENDAR: usize = 2_500;
 
 /// An event already on one of the user's calendars, reduced to what
 /// duplicate detection compares.

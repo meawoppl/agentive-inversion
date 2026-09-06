@@ -85,6 +85,10 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
         .route("/decisions", post(handlers::create_decision))
         .route("/decisions/pending", get(handlers::list_pending_decisions))
         .route("/decisions/stats", get(handlers::get_decision_stats))
+        .route(
+            "/decisions/rescan-events",
+            post(handlers::rescan_event_decisions),
+        )
         .route("/decisions/:id", get(handlers::get_decision))
         .route("/decisions/:id/approve", post(handlers::approve_decision))
         .route("/decisions/:id/reject", post(handlers::reject_decision))

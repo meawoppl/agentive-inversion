@@ -13,9 +13,9 @@ use shared_types::{
     CreateCategoryRequest, CreateTodoRequest, DecisionEmailContext, DecisionLogQuery,
     DecisionLogResponse, DecisionStats, DecisionTypeCount, EmailListQuery, EmailResponse,
     GoogleAccountResponse, PendingDecisionGroup, PendingDecisionItem, PendingDecisionsQuery,
-    PendingDecisionsResponse, PipelineStatsResponse, RejectDecisionRequest, SendChatMessageRequest,
-    SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse, TriageStageCount,
-    UpdateAboutMeRequest, UpdateCategoryRequest, UpdateTodoRequest,
+    PendingDecisionsResponse, PipelineStatsResponse, RejectDecisionRequest, RescanEventsResponse,
+    SendChatMessageRequest, SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse,
+    TriageStageCount, UpdateAboutMeRequest, UpdateCategoryRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 
@@ -25,6 +25,7 @@ use crate::db::{
     google_accounts, todos,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::services::calendar_dedupe;
 use crate::services::inbox::{self, GroupInput};
 use crate::services::DecisionService;
 use crate::AppState;
@@ -742,6 +743,24 @@ pub async fn list_pending_decisions(
         total_decisions,
         type_counts,
     }))
+}
+
+/// Re-screen the event proposals already in the review queue against the
+/// calendars. The submission-path check only sees new proposals, so this is
+/// how the backlog — and anything the user has accepted since it was queued
+/// — gets caught.
+pub async fn rescan_event_decisions(
+    State(state): State<AppState>,
+) -> ApiResult<Json<RescanEventsResponse>> {
+    let result = calendar_dedupe::rescan_queued_proposals(&state.pool)
+        .await
+        .map_err(ApiError::Internal)?;
+    tracing::info!(
+        "Event rescan: checked {}, withdrew {}",
+        result.checked,
+        result.withdrawn
+    );
+    Ok(Json(result))
 }
 
 pub async fn get_decision(

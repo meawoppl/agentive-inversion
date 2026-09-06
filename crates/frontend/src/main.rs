@@ -1094,6 +1094,28 @@ fn humanize_type(decision_type: &str) -> String {
     }
 }
 
+/// Distinct destinations across a group of forward proposals.
+///
+/// Approving a forward sends mail, so the address has to be legible on the
+/// control that sends it — "Approve all (5)" one click away from an expand
+/// toggle is not the place to hide where five emails are going. Normally
+/// there is exactly one address (the destination is server policy), but the
+/// group is rendered from whatever the decisions actually say.
+fn forward_destinations(group: &PendingDecisionGroup) -> Vec<String> {
+    let mut addresses: Vec<String> = Vec::new();
+    for item in &group.items {
+        let Ok(action) =
+            serde_json::from_value::<ProposedForwardAction>(item.decision.proposed_action.clone())
+        else {
+            continue;
+        };
+        if !addresses.contains(&action.to_address) {
+            addresses.push(action.to_address);
+        }
+    }
+    addresses
+}
+
 #[derive(Properties, PartialEq)]
 struct DecisionGroupCardProps {
     group: PendingDecisionGroup,
@@ -1120,6 +1142,7 @@ fn decision_group_card(props: &DecisionGroupCardProps) -> Html {
     let ids: Vec<Uuid> = group.items.iter().map(|i| i.decision.id).collect();
     let count = ids.len();
     let all_selected = !ids.is_empty() && ids.iter().all(|id| props.selected.contains(id));
+    let destinations = forward_destinations(group);
 
     if let [item] = group.items.as_slice() {
         return html! {
@@ -1185,6 +1208,15 @@ fn decision_group_card(props: &DecisionGroupCardProps) -> Html {
                         html! { <span class="group-address">{group.sender_address.clone().unwrap_or_default()}</span> }
                     } else {
                         html! {}
+                    }}
+                    {if destinations.is_empty() {
+                        html! {}
+                    } else {
+                        html! {
+                            <span class="group-forward-to" title="Approving forwards these emails to this address">
+                                {format!("\u{2192} {}", destinations.join(", "))}
+                            </span>
+                        }
                     }}
                 </div>
                 <span class="group-count">{format!("{}", count)}</span>

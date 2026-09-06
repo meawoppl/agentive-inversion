@@ -744,6 +744,20 @@ main {
     text-overflow: ellipsis;
 }
 
+/* Where a group of forwards is headed. Warmer than the sender address next
+   to it: approving this sends mail out of the account. */
+.group-forward-to {
+    font-size: 12px;
+    color: #a05a00;
+    background-color: #fdf3e3;
+    border: 1px solid #f0d9a8;
+    border-radius: 10px;
+    padding: 2px 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .group-count {
     font-weight: 600;
     color: #fff;

@@ -226,6 +226,19 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
 - Requires the `claude` binary plus a credential (DB-stored login token preferred, `ANTHROPIC_API_KEY` env fallback); otherwise mode=disabled and emails simply stay pending — there is no other classifier (the old keyword/rule system was removed 2026-08-04)
 - Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them
 
+### Flush and Re-triage
+- `POST /api/pipeline/retriage` (Pipeline tab, behind a two-click confirm)
+  sends every live email back to `triage_status = "pending"` so all three
+  agent passes run again. The triage poller drains it over the following
+  cycles; nothing is re-fetched from Gmail
+- Emails already `archived_in_gmail` are deliberately **not** reset: they are
+  out of the inbox and settled, and re-triaging them would refill the review
+  queues with mail already dealt with. The response reports the skipped count
+  rather than hiding the narrowing
+- Pending proposals are withdrawn, not deleted, so the old queue stays in the
+  Decision Log. Executed/approved decisions are untouched
+- It is expensive (a full Claude triage run over the corpus) and idempotent
+
 ### Decision Review Surfaces
 - The pending backlog runs to four figures, so neither review surface ships it
   whole. `GET /api/decisions/pending` returns a `PendingDecisionsResponse`:

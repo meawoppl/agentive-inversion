@@ -833,6 +833,17 @@ pub struct RescanWithdrawal {
     pub matched: String,
 }
 
+/// Outcome of flushing the triage state and re-running the pipeline
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RetriageResponse {
+    /// Emails sent back to the front of the pipeline
+    pub emails_reset: i64,
+    /// Emails left alone because they are already archived in Gmail
+    pub emails_skipped: i64,
+    /// Proposals withdrawn from the review queues to make room
+    pub decisions_withdrawn: i64,
+}
+
 /// Query parameters for the decision log
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DecisionLogQuery {
@@ -1427,6 +1438,16 @@ mod serde_roundtrip_tests {
                 matched: "\"Quarterly board meeting\" on matt@example.com calendar primary at 2026-09-10T17:00:00+00:00 (match=title_and_time, rsvp=needsAction)".to_string(),
             }],
             more_remaining: false,
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn retriage_response_roundtrips() {
+        let value = RetriageResponse {
+            emails_reset: 412,
+            emails_skipped: 769,
+            decisions_withdrawn: 1181,
         };
         assert_eq!(roundtrip(&value), value);
     }

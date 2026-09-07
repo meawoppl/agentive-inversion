@@ -8,8 +8,8 @@ use shared_types::{
     DecisionLogResponse, DecisionStats, GoogleAccountResponse, LoginInitResponse,
     PendingDecisionGroup, PendingDecisionItem, PendingDecisionsResponse, PipelineStatsResponse,
     ProposedCalendarEventAction, ProposedForwardAction, ProposedTodoAction, RejectDecisionRequest,
-    RescanEventsResponse, SendChatMessageRequest, SuggestedAction, Todo, UpdateAboutMeRequest,
-    UpdateTodoRequest,
+    RescanEventsResponse, RetriageResponse, SendChatMessageRequest, SuggestedAction, Todo,
+    UpdateAboutMeRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 use web_sys::{Element, HtmlInputElement};
@@ -3756,13 +3756,20 @@ fn archive_review_panel() -> Html {
 /// Pipeline infrastructure screen: triage mode, health, and stage counts
 #[function_component(PipelineView)]
 fn pipeline_view() -> Html {
+    let ctx = use_app_context();
     let stats = use_state(|| None::<PipelineStatsResponse>);
     let error = use_state(|| None::<String>);
+    let reload = use_state(|| 0u32);
+    // Re-triage discards the whole review queue, so it is deliberately two
+    // clicks: the second button only exists once the first is pressed.
+    let confirming_retriage = use_state(|| false);
+    let retriaging = use_state(|| false);
+    let retriage_result = use_state(|| None::<RetriageResponse>);
 
     {
         let stats = stats.clone();
         let error = error.clone();
-        use_effect_with((), move |_| {
+        use_effect_with(*reload, move |_| {
             let stats = stats.clone();
             let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -3778,6 +3785,35 @@ fn pipeline_view() -> Html {
             || ()
         });
     }
+
+    let on_retriage = {
+        let confirming_retriage = confirming_retriage.clone();
+        let retriaging = retriaging.clone();
+        let retriage_result = retriage_result.clone();
+        let reload = reload.clone();
+        let refresh_pending = ctx.refresh_pending_count.clone();
+        Callback::from(move |_| {
+            let confirming_retriage = confirming_retriage.clone();
+            let retriaging = retriaging.clone();
+            let retriage_result = retriage_result.clone();
+            let reload = reload.clone();
+            let refresh_pending = refresh_pending.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                retriaging.set(true);
+                if let Ok(response) = Request::post("/api/pipeline/retriage").send().await {
+                    if response.ok() {
+                        if let Ok(result) = response.json::<RetriageResponse>().await {
+                            retriage_result.set(Some(result));
+                            reload.set(*reload + 1);
+                            refresh_pending.emit(());
+                        }
+                    }
+                }
+                retriaging.set(false);
+                confirming_retriage.set(false);
+            });
+        })
+    };
 
     let stage_order = [
         ("pending", "Pending screening"),
@@ -3835,6 +3871,59 @@ fn pipeline_view() -> Html {
                                     </div>
                                 }
                             }).collect::<Html>()}
+                        </div>
+
+                        <div class="pipeline-danger-zone">
+                            <h4>{"Flush and re-triage"}</h4>
+                            <p class="pipeline-danger-note">
+                                {"Sends every live email back to the front of the pipeline so all                                   three agent passes run again — for when the rules have changed                                   and the existing verdicts are stale. Emails already archived in                                   Gmail are left settled, and nothing is re-fetched from Gmail.                                   Pending proposals are withdrawn, not deleted, so the old queue                                   stays in the Decision Log. Expect a full triage run, and expect                                   it to take many cycles to drain."}
+                            </p>
+                            {if *confirming_retriage {
+                                let cancel = {
+                                    let confirming_retriage = confirming_retriage.clone();
+                                    Callback::from(move |_| confirming_retriage.set(false))
+                                };
+                                html! {
+                                    <div class="pipeline-danger-actions">
+                                        <button class="btn-reject" disabled={*retriaging} onclick={on_retriage.clone()}>
+                                            {if *retriaging { "Flushing..." } else { "Yes, flush and re-triage everything" }}
+                                        </button>
+                                        <button class="btn-secondary" disabled={*retriaging} onclick={cancel}>
+                                            {"Cancel"}
+                                        </button>
+                                    </div>
+                                }
+                            } else {
+                                let start = {
+                                    let confirming_retriage = confirming_retriage.clone();
+                                    Callback::from(move |_| confirming_retriage.set(true))
+                                };
+                                html! {
+                                    <button class="btn-secondary" onclick={start}>
+                                        {"Flush and re-triage..."}
+                                    </button>
+                                }
+                            }}
+                            {if let Some(r) = &*retriage_result {
+                                html! {
+                                    <div class="rescan-result">
+                                        <span class="rescan-summary">
+                                            {format!(
+                                                "Reset {} email(s); withdrew {} pending proposal(s)",
+                                                r.emails_reset, r.decisions_withdrawn
+                                            )}
+                                        </span>
+                                        <div class="rescan-detail">
+                                            {format!(
+                                                "{} already archived in Gmail were left alone.                                                  Re-triage runs in the background over the next cycles.",
+                                                r.emails_skipped
+                                            )}
+                                        </div>
+                                    </div>
+                                }
+                            } else {
+                                html! {}
+                            }}
                         </div>
                     </>
                 }

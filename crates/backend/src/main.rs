@@ -103,6 +103,7 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
         // Triage pipeline routes (agent-cli + pipeline screen)
         .route("/triage/decisions", post(handlers::post_triage_decision))
         .route("/pipeline/stats", get(handlers::get_pipeline_stats))
+        .route("/pipeline/retriage", post(handlers::retriage_all))
         // Claude Code login flow (subscription auth for the triage pipeline)
         .route("/claude-auth/start", post(handlers::claude_auth_start))
         .route(

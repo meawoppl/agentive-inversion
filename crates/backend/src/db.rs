@@ -510,6 +510,33 @@ pub mod emails {
     }
 
     /// Counts by triage status for the pipeline display
+    /// Send every still-live email back to the front of the triage pipeline.
+    ///
+    /// Emails already archived or forwarded in Gmail are deliberately left
+    /// alone: they are out of the inbox and settled, and re-triaging them
+    /// would refill the review queues with mail the user has already dealt
+    /// with. Returns (reset, skipped).
+    pub async fn reset_for_retriage(conn: &mut AsyncPgConnection) -> anyhow::Result<(i64, i64)> {
+        use crate::schema::emails::dsl::*;
+
+        let skipped: i64 = emails
+            .filter(archived_in_gmail.eq(true))
+            .count()
+            .get_result(conn)
+            .await?;
+
+        let reset = diesel::update(emails.filter(archived_in_gmail.eq(false)))
+            .set((
+                triage_status.eq("pending"),
+                processed.eq(false),
+                processed_at.eq(None::<DateTime<Utc>>),
+            ))
+            .execute(conn)
+            .await?;
+
+        Ok((reset as i64, skipped))
+    }
+
     pub async fn triage_status_counts(
         conn: &mut AsyncPgConnection,
     ) -> anyhow::Result<Vec<(String, i64)>> {
@@ -1008,6 +1035,27 @@ pub mod decisions {
             .await?;
 
         Ok(row.into())
+    }
+
+    /// Withdraw every proposal awaiting review, for a full re-triage. The
+    /// rows stay for the audit trail and can be flipped back to proposed.
+    pub async fn withdraw_all_proposed(
+        conn: &mut AsyncPgConnection,
+        note: &str,
+    ) -> anyhow::Result<i64> {
+        use crate::schema::agent_decisions::dsl::*;
+
+        let updated =
+            diesel::update(agent_decisions.filter(status.eq(DecisionStatus::Proposed.as_str())))
+                .set((
+                    status.eq(DecisionStatus::Withdrawn.as_str()),
+                    user_feedback.eq(Some(note)),
+                    reviewed_at.eq(Some(Utc::now())),
+                ))
+                .execute(conn)
+                .await?;
+
+        Ok(updated as i64)
     }
 
     /// Pull a decision out of the review queue by server policy. Unlike

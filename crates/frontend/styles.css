@@ -659,6 +659,39 @@ main {
     font-size: 12px;
 }
 
+/* Destructive pipeline controls, fenced off from the read-only stats above */
+.pipeline-danger-zone {
+    margin-top: 28px;
+    padding: 16px;
+    border: 1px solid #f0d9a8;
+    border-left: 4px solid #e0af68;
+    border-radius: 6px;
+    background-color: #fdf9f2;
+}
+
+.pipeline-danger-zone h4 {
+    color: #8a5a00;
+    margin-bottom: 8px;
+}
+
+.pipeline-danger-note {
+    color: #6b5636;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+    max-width: 70ch;
+}
+
+.pipeline-danger-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.pipeline-danger-zone .rescan-result {
+    margin-top: 12px;
+}
+
 /* Queue-wide maintenance actions, above the groups they act on */
 .inbox-tools {
     display: flex;

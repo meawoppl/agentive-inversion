@@ -14,8 +14,9 @@ use shared_types::{
     DecisionLogResponse, DecisionStats, DecisionTypeCount, EmailListQuery, EmailResponse,
     GoogleAccountResponse, PendingDecisionGroup, PendingDecisionItem, PendingDecisionsQuery,
     PendingDecisionsResponse, PipelineStatsResponse, RejectDecisionRequest, RescanEventsResponse,
-    SendChatMessageRequest, SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse,
-    TriageStageCount, UpdateAboutMeRequest, UpdateCategoryRequest, UpdateTodoRequest,
+    RetriageResponse, SendChatMessageRequest, SuggestedAction, Todo, TriageDecideRequest,
+    TriageDecideResponse, TriageStageCount, UpdateAboutMeRequest, UpdateCategoryRequest,
+    UpdateTodoRequest,
 };
 use uuid::Uuid;
 
@@ -524,6 +525,32 @@ pub async fn claude_auth_status(
 }
 
 // Bulk audit surface for archive determinations (the dry-run review)
+/// Flush triage state and send every live email back through the pipeline.
+///
+/// For when the rules changed and the existing verdicts are stale. Pending
+/// proposals are withdrawn rather than deleted so the old queue stays
+/// auditable, and emails already archived in Gmail are left settled. The
+/// triage poller picks the reset emails up on its next cycles; nothing is
+/// re-fetched from Gmail.
+pub async fn retriage_all(State(state): State<AppState>) -> ApiResult<Json<RetriageResponse>> {
+    let mut conn = get_conn(&state.pool).await?;
+
+    let decisions_withdrawn =
+        decisions::withdraw_all_proposed(&mut conn, "Withdrawn by a full re-triage").await?;
+    let (emails_reset, emails_skipped) = emails::reset_for_retriage(&mut conn).await?;
+
+    tracing::warn!(
+        "Full re-triage requested: {emails_reset} emails reset, {emails_skipped} left archived, \
+         {decisions_withdrawn} proposals withdrawn"
+    );
+
+    Ok(Json(RetriageResponse {
+        emails_reset,
+        emails_skipped,
+        decisions_withdrawn,
+    }))
+}
+
 pub async fn get_archive_review(
     State(state): State<AppState>,
 ) -> ApiResult<Json<ArchiveReviewResponse>> {

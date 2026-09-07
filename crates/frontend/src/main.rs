@@ -1413,8 +1413,20 @@ fn decision_group_card(props: &DecisionGroupCardProps) -> Html {
                     <div class="decision-group-preview">
                         {group.items.iter().take(3).map(|item| html! {
                             <div class="group-preview-line">
-                                {item.email.as_ref().map(|e| e.subject.clone())
-                                    .unwrap_or_else(|| item.decision.reasoning.clone())}
+                                {match item.email.as_ref() {
+                                    Some(email) => html! {
+                                        <a
+                                            class="email-link"
+                                            href={email.gmail_link.clone()}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            title="Open the original in Gmail"
+                                        >
+                                            {&email.subject}
+                                        </a>
+                                    },
+                                    None => html! { {&item.decision.reasoning} },
+                                }}
                             </div>
                         }).collect::<Html>()}
                         {if count > 3 {
@@ -1508,7 +1520,18 @@ fn decision_row(props: &DecisionRowProps) -> Html {
                     html! {
                         <div class="decision-email-info">
                             <span class="email-from">{email.from_name.clone().unwrap_or_else(|| email.from_address.clone())}</span>
-                            <span class="email-subject">{&email.subject}</span>
+                            // The row itself opens the detail modal, so the
+                            // link has to swallow the click that follows it
+                            <a
+                                class="email-subject email-link"
+                                href={email.gmail_link.clone()}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Open the original in Gmail"
+                                onclick={Callback::from(|e: MouseEvent| e.stop_propagation())}
+                            >
+                                {&email.subject}
+                            </a>
                         </div>
                     }
                 } else {
@@ -1745,7 +1768,19 @@ fn decision_detail_view(props: &DecisionDetailProps) -> Html {
                 <h4>{"Timeline"}</h4>
                 {if let Some(email) = &props.email {
                     html! {
-                        <p>{format!("Email received: {}", email.received_at.format("%Y-%m-%d %H:%M:%S"))}</p>
+                        <>
+                            <p>{format!("Email received: {}", email.received_at.format("%Y-%m-%d %H:%M:%S"))}</p>
+                            <p>
+                                <a
+                                    class="source-email-link"
+                                    href={email.gmail_link.clone()}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                >
+                                    {format!("Open \u{201c}{}\u{201d} in Gmail", email.subject)}
+                                </a>
+                            </p>
+                        </>
                     }
                 } else {
                     html! {}
@@ -3739,7 +3774,15 @@ fn archive_review_panel() -> Html {
                                                 <span class="review-item-from">
                                                     {item.from_name.clone().unwrap_or_else(|| item.from_address.clone())}
                                                 </span>
-                                                <span class="review-item-subject">{&item.subject}</span>
+                                                <a
+                                                    class="review-item-subject email-link"
+                                                    href={item.gmail_link.clone()}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    title="Open the original in Gmail"
+                                                >
+                                                    {&item.subject}
+                                                </a>
                                                 <span class="review-item-reason" title={item.reasoning.clone()}>
                                                     {&item.reasoning}
                                                 </span>

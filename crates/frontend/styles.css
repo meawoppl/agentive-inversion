@@ -977,6 +977,32 @@ main {
     color: #7f8c8d;
 }
 
+/* A subject doubles as the way back to the message it came from. Styled as
+   plain text until hovered: a dense queue should not read as a wall of blue,
+   but every reference to a source email must be reachable. Colour is left to
+   the surrounding context, so these inherit whatever the row already sets. */
+.email-link {
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.email-link:hover,
+.email-link:focus-visible {
+    text-decoration: underline;
+    color: #2980b9;
+}
+
+/* The standalone "open in Gmail" action, which should look like a link */
+.source-email-link {
+    color: #2980b9;
+    text-decoration: none;
+}
+
+.source-email-link:hover {
+    text-decoration: underline;
+}
+
 .decision-proposed {
     margin-bottom: 8px;
 }

@@ -4,7 +4,7 @@
 //! testability and reuse. It provides a centralized place for decision
 //! approval/rejection logic.
 
-use crate::db::{decisions, todos, DbPool};
+use crate::db::{decisions, emails, google_accounts, todos, DbPool};
 use anyhow::{Context, Result};
 use diesel_async::AsyncPgConnection;
 use shared_types::{AgentDecision, ProposedTodoAction};
@@ -32,6 +32,27 @@ pub struct BatchFailure {
 pub struct DecisionService;
 
 impl DecisionService {
+    /// Permalink back to the email a decision came from.
+    ///
+    /// Best-effort: a missing account or email should not block creating the
+    /// todo, it just means that one has no link.
+    async fn source_email_link(
+        conn: &mut AsyncPgConnection,
+        decision: &AgentDecision,
+    ) -> Option<String> {
+        if decision.source_type != "email" {
+            return None;
+        }
+        let email = emails::get_by_id(conn, decision.source_id?).await.ok()?;
+        let account = google_accounts::get_by_id(conn, email.account_id)
+            .await
+            .ok()?;
+        Some(crate::services::triage::gmail_permalink(
+            &account.email,
+            &email.gmail_id,
+        ))
+    }
+
     /// Approve a decision, optionally with modifications to the proposed action
     pub async fn approve(
         conn: &mut AsyncPgConnection,
@@ -46,12 +67,15 @@ impl DecisionService {
         // Create todo if decision type is create_todo
         let created_todo_id = if decision.decision_type == "create_todo" {
             let action = Self::get_action(&decision, modifications)?;
+            // Carry the source email across, so the todo keeps a way back to
+            // the message that produced it
+            let link = Self::source_email_link(conn, &decision).await;
             let todo = todos::create(
                 conn,
                 &action.todo_title,
                 action.todo_description.as_deref(),
                 action.due_date,
-                None,
+                link.as_deref(),
                 action.category_id,
             )
             .await

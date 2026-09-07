@@ -178,6 +178,42 @@ fn format_relative_time(time: &chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// Render a UTC instant in the viewer's own timezone. Server timestamps are
+/// UTC, but nobody reads their own calendar in UTC — chrono's wasmbind
+/// backend takes the zone from the browser.
+fn format_local_time(time: &chrono::DateTime<chrono::Utc>) -> String {
+    time.with_timezone(&chrono::Local)
+        .format("%-I:%M:%S %p")
+        .to_string()
+}
+
+/// Same, without seconds — for a time that is a schedule rather than a record
+fn format_local_clock(time: &chrono::DateTime<chrono::Utc>) -> String {
+    time.with_timezone(&chrono::Local)
+        .format("%-I:%M %p")
+        .to_string()
+}
+
+/// How long until a future instant, as "in 4m". A schedule that has come and
+/// gone reads "due now" rather than a negative countdown: the cycle may be
+/// running right now, or the last one may have overrun.
+fn format_countdown(time: &chrono::DateTime<chrono::Utc>) -> String {
+    let remaining = *time - chrono::Utc::now();
+    if remaining.num_seconds() <= 0 {
+        "due now".to_string()
+    } else if remaining.num_seconds() < 60 {
+        format!("in {}s", remaining.num_seconds())
+    } else if remaining.num_minutes() < 60 {
+        format!("in {}m", remaining.num_minutes())
+    } else {
+        format!(
+            "in {}h{}m",
+            remaining.num_hours(),
+            remaining.num_minutes() % 60
+        )
+    }
+}
+
 #[function_component(AccountStatus)]
 fn account_status() -> Html {
     let accounts = use_state(Vec::<GoogleAccountResponse>::new);
@@ -3754,12 +3790,19 @@ fn archive_review_panel() -> Html {
 }
 
 /// Pipeline infrastructure screen: triage mode, health, and stage counts
+/// How often the pipeline view re-polls while open. Short enough that the
+/// next-run countdown stays roughly true, long enough not to hammer a
+/// group-by over the whole email table.
+const PIPELINE_REFRESH_MS: u32 = 20_000;
+
 #[function_component(PipelineView)]
 fn pipeline_view() -> Html {
     let ctx = use_app_context();
     let stats = use_state(|| None::<PipelineStatsResponse>);
     let error = use_state(|| None::<String>);
     let reload = use_state(|| 0u32);
+    // A countdown that never re-renders is a lie after its first minute
+    let tick = use_state(|| 0u32);
     // Re-triage discards the whole review queue, so it is deliberately two
     // clicks: the second button only exists once the first is pressed.
     let confirming_retriage = use_state(|| false);
@@ -3769,7 +3812,7 @@ fn pipeline_view() -> Html {
     {
         let stats = stats.clone();
         let error = error.clone();
-        use_effect_with(*reload, move |_| {
+        use_effect_with((*reload, *tick), move |_| {
             let stats = stats.clone();
             let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -3783,6 +3826,20 @@ fn pipeline_view() -> Html {
                 }
             });
             || ()
+        });
+    }
+
+    // Re-poll while the tab is open: keeps the countdown honest and picks up
+    // a cycle finishing without the user reloading.
+    {
+        let tick = tick.clone();
+        use_effect_with((), move |_| {
+            let counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
+            let interval = gloo::timers::callback::Interval::new(PIPELINE_REFRESH_MS, move || {
+                counter.set(counter.get().wrapping_add(1));
+                tick.set(counter.get());
+            });
+            move || drop(interval)
         });
     }
 
@@ -3852,7 +3909,20 @@ fn pipeline_view() -> Html {
                             <span class="pipeline-mode-label">{"Mode: "}</span>
                             <strong>{&s.mode}</strong>
                             {if let Some(t) = &s.last_cycle_at {
-                                html! { <span class="pipeline-last-cycle">{format!(" — last cycle {}", t.format("%H:%M:%S UTC"))}</span> }
+                                html! {
+                                    <span class="pipeline-last-cycle" title={format!("{} UTC", t.format("%Y-%m-%d %H:%M:%S"))}>
+                                        {format!(" — last cycle {}", format_local_time(t))}
+                                    </span>
+                                }
+                            } else {
+                                html! {}
+                            }}
+                            {if let Some(t) = &s.next_cycle_at {
+                                html! {
+                                    <span class="pipeline-next-cycle" title={format!("{} UTC", t.format("%Y-%m-%d %H:%M:%S"))}>
+                                        {format!(" · next run {} ({})", format_local_clock(t), format_countdown(t))}
+                                    </span>
+                                }
                             } else {
                                 html! {}
                             }}

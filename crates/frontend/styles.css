@@ -659,6 +659,10 @@ main {
     font-size: 12px;
 }
 
+.pipeline-next-cycle {
+    color: #7f8c8d;
+}
+
 /* Destructive pipeline controls, fenced off from the read-only stats above */
 .pipeline-danger-zone {
     margin-top: 28px;

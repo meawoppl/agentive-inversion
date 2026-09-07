@@ -224,7 +224,13 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
   than the database
 - Receipt forwarding is gated: screening proposes `forward_email` decisions for receipts; approval forwards the original as an RFC 822 attachment from the account it landed in (destination is server policy: `TRIAGE_FORWARD_TO`, default receipts@ramp.com — agents never choose destinations), then labels `agent-forwarded` and archives
 - Requires the `claude` binary plus a credential (DB-stored login token preferred, `ANTHROPIC_API_KEY` env fallback); otherwise mode=disabled and emails simply stay pending — there is no other classifier (the old keyword/rule system was removed 2026-08-04)
-- Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them
+- Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them. `PipelineStatsResponse` field names are pinned by a serde test; add fields, never rename them
+- The poller records `next_cycle_at` as its sleep begins rather than letting
+  the UI derive it from `last_cycle_at + interval` — a skipped cycle (no
+  credential) or an overrunning one would make that derivation lie
+- Timestamps cross the wire as UTC and are rendered in the viewer's zone
+  (`format_local_time` / `format_local_clock`); chrono's wasmbind backend
+  reads the zone from the browser. UTC stays available in the title tooltip
 
 ### Flush and Re-triage
 - `POST /api/pipeline/retriage` (Pipeline tab, behind a two-click confirm)

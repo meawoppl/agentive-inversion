@@ -549,6 +549,10 @@ pub enum DecisionStatus {
     AutoApproved,
     Executed,
     Failed,
+    /// Pulled from the review queue by server policy rather than by the user
+    /// — e.g. a proposed event that turned out to already be on a calendar.
+    /// Distinct from Rejected so it never counts as a judgement the user made.
+    Withdrawn,
 }
 
 impl DecisionStatus {
@@ -560,6 +564,7 @@ impl DecisionStatus {
             DecisionStatus::AutoApproved => "auto_approved",
             DecisionStatus::Executed => "executed",
             DecisionStatus::Failed => "failed",
+            DecisionStatus::Withdrawn => "withdrawn",
         }
     }
 
@@ -571,6 +576,7 @@ impl DecisionStatus {
             "auto_approved" => Some(DecisionStatus::AutoApproved),
             "executed" => Some(DecisionStatus::Executed),
             "failed" => Some(DecisionStatus::Failed),
+            "withdrawn" => Some(DecisionStatus::Withdrawn),
             _ => None,
         }
     }
@@ -801,6 +807,41 @@ pub struct PendingDecisionsQuery {
     pub page: Option<i64>,
     pub page_size: Option<i64>,
     pub decision_type: Option<String>,
+}
+
+/// Outcome of re-screening the queued event proposals against the calendars
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RescanEventsResponse {
+    /// Proposals examined on this pass
+    pub checked: i64,
+    /// Proposals pulled from the queue because the event already exists
+    pub withdrawn: i64,
+    /// What was withdrawn and why, newest proposal first
+    pub details: Vec<RescanWithdrawal>,
+    /// True when more proposals were queued than one pass examines; run it
+    /// again to continue
+    pub more_remaining: bool,
+}
+
+/// One proposal the rescan pulled from the queue
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RescanWithdrawal {
+    pub decision_id: Uuid,
+    /// What the agent proposed to create
+    pub summary: String,
+    /// The calendar entry it turned out to duplicate
+    pub matched: String,
+}
+
+/// Outcome of flushing the triage state and re-running the pipeline
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RetriageResponse {
+    /// Emails sent back to the front of the pipeline
+    pub emails_reset: i64,
+    /// Emails left alone because they are already archived in Gmail
+    pub emails_skipped: i64,
+    /// Proposals withdrawn from the review queues to make room
+    pub decisions_withdrawn: i64,
 }
 
 /// Query parameters for the decision log
@@ -1128,6 +1169,7 @@ mod serde_roundtrip_tests {
             DecisionStatus::AutoApproved,
             DecisionStatus::Executed,
             DecisionStatus::Failed,
+            DecisionStatus::Withdrawn,
         ] {
             assert_eq!(roundtrip(&value), value);
             assert_eq!(DecisionStatus::parse(value.as_str()), Some(value));
@@ -1381,6 +1423,31 @@ mod serde_roundtrip_tests {
             page: 0,
             page_size: 50,
             total: 4200,
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn rescan_events_response_roundtrips() {
+        let value = RescanEventsResponse {
+            checked: 12,
+            withdrawn: 2,
+            details: vec![RescanWithdrawal {
+                decision_id: Uuid::new_v4(),
+                summary: "Quarterly board meeting".to_string(),
+                matched: "\"Quarterly board meeting\" on matt@example.com calendar primary at 2026-09-10T17:00:00+00:00 (match=title_and_time, rsvp=needsAction)".to_string(),
+            }],
+            more_remaining: false,
+        };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn retriage_response_roundtrips() {
+        let value = RetriageResponse {
+            emails_reset: 412,
+            emails_skipped: 769,
+            decisions_withdrawn: 1181,
         };
         assert_eq!(roundtrip(&value), value);
     }

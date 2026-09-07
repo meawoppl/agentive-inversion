@@ -659,6 +659,73 @@ main {
     font-size: 12px;
 }
 
+/* Destructive pipeline controls, fenced off from the read-only stats above */
+.pipeline-danger-zone {
+    margin-top: 28px;
+    padding: 16px;
+    border: 1px solid #f0d9a8;
+    border-left: 4px solid #e0af68;
+    border-radius: 6px;
+    background-color: #fdf9f2;
+}
+
+.pipeline-danger-zone h4 {
+    color: #8a5a00;
+    margin-bottom: 8px;
+}
+
+.pipeline-danger-note {
+    color: #6b5636;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+    max-width: 70ch;
+}
+
+.pipeline-danger-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.pipeline-danger-zone .rescan-result {
+    margin-top: 12px;
+}
+
+/* Queue-wide maintenance actions, above the groups they act on */
+.inbox-tools {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.inbox-tools button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.rescan-result {
+    background-color: #f4f7f9;
+    border: 1px solid #e1e5e8;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 13px;
+    max-width: 100%;
+}
+
+.rescan-summary {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.rescan-detail {
+    color: #7f8c8d;
+    padding-top: 4px;
+    word-break: break-word;
+}
+
 /* Page controls, repeated above and below long lists */
 .pager {
     display: flex;
@@ -1127,6 +1194,15 @@ main {
     border: 1px solid #ddd;
     border-radius: 4px;
     font-size: 14px;
+}
+
+.log-item.status-withdrawn {
+    border-left-color: #95a5a6;
+}
+
+.status-badge.status-withdrawn {
+    background-color: #eceff1;
+    color: #607d8b;
 }
 
 .log-day {

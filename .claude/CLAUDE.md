@@ -41,6 +41,14 @@ This is a Rust workspace with 3 crates:
 - Only use `serde_json::Value` at API boundaries when parsing/serializing, convert to typed structs immediately
 - Define explicit types for all data structures in `shared-types` crate
 
+### Dates in Decision Surfaces
+- Proposal rows, group headers and the detail modal show the **email's
+  received date**, not the decision's `created_at`. A proposal made today
+  about a three-week-old message is a three-week-old thing, and dating it
+  "today" hides the staleness the reviewer is judging. `created_at` is still
+  shown, explicitly labelled "Proposed", in the detail modal and the tooltip
+- The Decision Log is a chronology of decisions, so it keeps `created_at`
+
 ### Frontend Development
 - Use Trunk to build and serve the frontend
 - Run `trunk serve` from `crates/frontend` for development
@@ -194,8 +202,22 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
   through, because an unreadable calendar cannot prove a duplicate. Disable
   with `TRIAGE_EVENT_DEDUPE=off`
 - Matching is pure and unit-tested in `calendar_dedupe`; only `find_existing`
-  touches Google. Agents are told not to guess at this themselves — they
-  cannot see the calendars
+  and `find_existing_bulk` touch Google. Agents are told not to guess at this
+  themselves — they cannot see the calendars
+- The submission-path check only ever sees NEW proposals. `POST
+  /api/decisions/rescan-events` applies the same rules to the queued backlog
+  (Inbox button, shown when event proposals exist). It reads each calendar
+  once over a window covering every candidate, so a 50-proposal rescan is a
+  handful of API calls, not hundreds
+- A rescan **withdraws**, never deletes: status `withdrawn`, with the matched
+  entry in `user_feedback`. Withdrawn is deliberately not `rejected` — it is
+  server policy, not a judgement the user made, so it stays out of the
+  rejected stat and can be flipped back to `proposed` if the heuristic was
+  wrong
+- Events whose start is already past (beyond a `PAST_EVENT_GRACE_HOURS`
+  window) never become proposals at all: `redirect_past_events` in
+  `services/triage.rs` rewrites the disposition to Archive, so it honours
+  `TRIAGE_ARCHIVE_MODE` like any other archive
 - Calendar reads and writes both live in `calendar_client.rs`
   (`CalendarClient`). The `calendar_events` table is still unpopulated: the
   calendar poller is a stub, so dedupe queries the Google API live rather
@@ -203,6 +225,19 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
 - Receipt forwarding is gated: screening proposes `forward_email` decisions for receipts; approval forwards the original as an RFC 822 attachment from the account it landed in (destination is server policy: `TRIAGE_FORWARD_TO`, default receipts@ramp.com — agents never choose destinations), then labels `agent-forwarded` and archives
 - Requires the `claude` binary plus a credential (DB-stored login token preferred, `ANTHROPIC_API_KEY` env fallback); otherwise mode=disabled and emails simply stay pending — there is no other classifier (the old keyword/rule system was removed 2026-08-04)
 - Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them
+
+### Flush and Re-triage
+- `POST /api/pipeline/retriage` (Pipeline tab, behind a two-click confirm)
+  sends every live email back to `triage_status = "pending"` so all three
+  agent passes run again. The triage poller drains it over the following
+  cycles; nothing is re-fetched from Gmail
+- Emails already `archived_in_gmail` are deliberately **not** reset: they are
+  out of the inbox and settled, and re-triaging them would refill the review
+  queues with mail already dealt with. The response reports the skipped count
+  rather than hiding the narrowing
+- Pending proposals are withdrawn, not deleted, so the old queue stays in the
+  Decision Log. Executed/approved decisions are untouched
+- It is expensive (a full Claude triage run over the corpus) and idempotent
 
 ### Decision Review Surfaces
 - The pending backlog runs to four figures, so neither review surface ships it

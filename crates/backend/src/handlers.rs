@@ -13,9 +13,10 @@ use shared_types::{
     CreateCategoryRequest, CreateTodoRequest, DecisionEmailContext, DecisionLogQuery,
     DecisionLogResponse, DecisionStats, DecisionTypeCount, EmailListQuery, EmailResponse,
     GoogleAccountResponse, PendingDecisionGroup, PendingDecisionItem, PendingDecisionsQuery,
-    PendingDecisionsResponse, PipelineStatsResponse, RejectDecisionRequest, SendChatMessageRequest,
-    SuggestedAction, Todo, TriageDecideRequest, TriageDecideResponse, TriageStageCount,
-    UpdateAboutMeRequest, UpdateCategoryRequest, UpdateTodoRequest,
+    PendingDecisionsResponse, PipelineStatsResponse, RejectDecisionRequest, RescanEventsResponse,
+    RetriageResponse, SendChatMessageRequest, SuggestedAction, Todo, TriageDecideRequest,
+    TriageDecideResponse, TriageStageCount, UpdateAboutMeRequest, UpdateCategoryRequest,
+    UpdateTodoRequest,
 };
 use uuid::Uuid;
 
@@ -25,6 +26,7 @@ use crate::db::{
     google_accounts, todos,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::services::calendar_dedupe;
 use crate::services::inbox::{self, GroupInput};
 use crate::services::DecisionService;
 use crate::AppState;
@@ -523,6 +525,32 @@ pub async fn claude_auth_status(
 }
 
 // Bulk audit surface for archive determinations (the dry-run review)
+/// Flush triage state and send every live email back through the pipeline.
+///
+/// For when the rules changed and the existing verdicts are stale. Pending
+/// proposals are withdrawn rather than deleted so the old queue stays
+/// auditable, and emails already archived in Gmail are left settled. The
+/// triage poller picks the reset emails up on its next cycles; nothing is
+/// re-fetched from Gmail.
+pub async fn retriage_all(State(state): State<AppState>) -> ApiResult<Json<RetriageResponse>> {
+    let mut conn = get_conn(&state.pool).await?;
+
+    let decisions_withdrawn =
+        decisions::withdraw_all_proposed(&mut conn, "Withdrawn by a full re-triage").await?;
+    let (emails_reset, emails_skipped) = emails::reset_for_retriage(&mut conn).await?;
+
+    tracing::warn!(
+        "Full re-triage requested: {emails_reset} emails reset, {emails_skipped} left archived, \
+         {decisions_withdrawn} proposals withdrawn"
+    );
+
+    Ok(Json(RetriageResponse {
+        emails_reset,
+        emails_skipped,
+        decisions_withdrawn,
+    }))
+}
+
 pub async fn get_archive_review(
     State(state): State<AppState>,
 ) -> ApiResult<Json<ArchiveReviewResponse>> {
@@ -742,6 +770,24 @@ pub async fn list_pending_decisions(
         total_decisions,
         type_counts,
     }))
+}
+
+/// Re-screen the event proposals already in the review queue against the
+/// calendars. The submission-path check only sees new proposals, so this is
+/// how the backlog — and anything the user has accepted since it was queued
+/// — gets caught.
+pub async fn rescan_event_decisions(
+    State(state): State<AppState>,
+) -> ApiResult<Json<RescanEventsResponse>> {
+    let result = calendar_dedupe::rescan_queued_proposals(&state.pool)
+        .await
+        .map_err(ApiError::Internal)?;
+    tracing::info!(
+        "Event rescan: checked {}, withdrew {}",
+        result.checked,
+        result.withdrawn
+    );
+    Ok(Json(result))
 }
 
 pub async fn get_decision(

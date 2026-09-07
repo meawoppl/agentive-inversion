@@ -1,13 +1,15 @@
+use chrono::{DateTime, Utc};
 use gloo_net::http::Request;
 use shared_types::{
     AboutMeResponse, AgentDecisionResponse, ApproveDecisionRequest, ArchiveReviewItem,
     ArchiveReviewResponse, AuthUserResponse, BatchApproveDecisionsRequest, BatchOperationResponse,
     BatchRejectDecisionsRequest, CalendarEventResponse, Category, ChatMessageResponse,
-    ChatResponse, ClaudeAuthStatusResponse, CreateTodoRequest, DecisionLogResponse, DecisionStats,
-    GoogleAccountResponse, LoginInitResponse, PendingDecisionGroup, PendingDecisionItem,
-    PendingDecisionsResponse, PipelineStatsResponse, ProposedCalendarEventAction,
-    ProposedForwardAction, ProposedTodoAction, RejectDecisionRequest, SendChatMessageRequest,
-    SuggestedAction, Todo, UpdateAboutMeRequest, UpdateTodoRequest,
+    ChatResponse, ClaudeAuthStatusResponse, CreateTodoRequest, DecisionEmailContext,
+    DecisionLogResponse, DecisionStats, GoogleAccountResponse, LoginInitResponse,
+    PendingDecisionGroup, PendingDecisionItem, PendingDecisionsResponse, PipelineStatsResponse,
+    ProposedCalendarEventAction, ProposedForwardAction, ProposedTodoAction, RejectDecisionRequest,
+    RescanEventsResponse, RetriageResponse, SendChatMessageRequest, SuggestedAction, Todo,
+    UpdateAboutMeRequest, UpdateTodoRequest,
 };
 use uuid::Uuid;
 use web_sys::{Element, HtmlInputElement};
@@ -656,7 +658,9 @@ fn decision_inbox() -> Html {
     let refresh_trigger = use_state(|| 0u32);
     let expanded = use_state(std::collections::HashSet::<String>::new);
     let selected_decisions = use_state(std::collections::HashSet::<Uuid>::new);
-    let selected_decision = use_state(|| None::<AgentDecisionResponse>);
+    let selected_decision = use_state(|| None::<PendingDecisionItem>);
+    let rescanning = use_state(|| false);
+    let rescan_result = use_state(|| None::<RescanEventsResponse>);
 
     // One request per page: the response already carries each decision's
     // email, so there is no per-row fetch
@@ -815,6 +819,37 @@ fn decision_inbox() -> Html {
         })
     };
 
+    // Proposals queued before the submission-path check existed were never
+    // screened, and one queued last week may have been accepted since.
+    let on_rescan_events = {
+        let rescanning = rescanning.clone();
+        let rescan_result = rescan_result.clone();
+        let reload = reload.clone();
+        let refresh_pending = ctx.refresh_pending_count.clone();
+        Callback::from(move |_| {
+            if *rescanning {
+                return;
+            }
+            let rescanning = rescanning.clone();
+            let rescan_result = rescan_result.clone();
+            let reload = reload.clone();
+            let refresh_pending = refresh_pending.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                rescanning.set(true);
+                if let Ok(response) = Request::post("/api/decisions/rescan-events").send().await {
+                    if response.ok() {
+                        if let Ok(result) = response.json::<RescanEventsResponse>().await {
+                            rescan_result.set(Some(result));
+                            reload.emit(());
+                            refresh_pending.emit(());
+                        }
+                    }
+                }
+                rescanning.set(false);
+            });
+        })
+    };
+
     let toggle_selection = {
         let selected_decisions = selected_decisions.clone();
         Callback::from(move |id: Uuid| {
@@ -884,6 +919,13 @@ fn decision_inbox() -> Html {
         .iter()
         .flat_map(|g| g.items.iter().map(|i| i.decision.id))
         .collect();
+    // The rescan is only worth offering when there is an event backlog to screen
+    let queued_events = page_data
+        .type_counts
+        .iter()
+        .find(|c| c.decision_type == "create_calendar_event")
+        .map(|c| c.count)
+        .unwrap_or(0);
     let selected_count = selected_decisions.len();
     let total_pages = if page_data.page_size > 0 {
         (page_data.total_groups + page_data.page_size - 1) / page_data.page_size
@@ -979,6 +1021,50 @@ fn decision_inbox() -> Html {
 
             {filter_chips}
 
+            {if queued_events == 0 {
+                    html! {}
+                } else {
+                    html! {
+                        <div class="inbox-tools">
+                            <button
+                                class="btn-secondary"
+                                disabled={*rescanning}
+                                onclick={on_rescan_events.clone()}
+                            >
+                                {if *rescanning {
+                                    "Checking calendars...".to_string()
+                                } else {
+                                    format!("Re-check {} event proposal(s) against calendars", queued_events)
+                                }}
+                            </button>
+                            {if let Some(result) = &*rescan_result {
+                                html! {
+                                    <div class="rescan-result">
+                                        <span class="rescan-summary">
+                                            {if result.withdrawn == 0 {
+                                                format!("Checked {} - none were already on a calendar", result.checked)
+                                            } else {
+                                                format!(
+                                                    "Checked {} - withdrew {} already on a calendar",
+                                                    result.checked, result.withdrawn
+                                                )
+                                            }}
+                                            {if result.more_remaining { " (more remaining, run again)" } else { "" }}
+                                        </span>
+                                        {result.details.iter().map(|w| html! {
+                                            <div class="rescan-detail" key={w.decision_id.to_string()}>
+                                                {format!("\u{201c}{}\u{201d} \u{2192} {}", w.summary, w.matched)}
+                                            </div>
+                                        }).collect::<Html>()}
+                                    </div>
+                                }
+                            } else {
+                                html! {}
+                            }}
+                        </div>
+                    }
+                }}
+
             {if page_data.groups.is_empty() {
                 html! { <p class="empty-state">{"No pending decisions. All caught up!"}</p> }
             } else {
@@ -1028,7 +1114,7 @@ fn decision_inbox() -> Html {
                                         on_reject_many={batch_reject_ids.clone()}
                                         on_open={
                                             let selected_decision = selected_decision.clone();
-                                            Callback::from(move |d: AgentDecisionResponse| selected_decision.set(Some(d)))
+                                            Callback::from(move |item: PendingDecisionItem| selected_decision.set(Some(item)))
                                         }
                                     />
                                 }
@@ -1041,7 +1127,8 @@ fn decision_inbox() -> Html {
             }}
 
             // Decision detail modal
-            {if let Some(decision) = &*selected_decision {
+            {if let Some(item) = &*selected_decision {
+                let decision = &item.decision;
                 let close_modal = {
                     let selected_decision = selected_decision.clone();
                     Callback::from(move |_| selected_decision.set(None))
@@ -1059,7 +1146,7 @@ fn decision_inbox() -> Html {
                                 <button class="modal-close" onclick={close_modal}>{"x"}</button>
                             </div>
                             <div class="modal-body">
-                                <DecisionDetailView decision={decision.clone()} />
+                                <DecisionDetailView decision={decision.clone()} email={item.email.clone()} />
                             </div>
                             <div class="modal-footer">
                                 <button class="btn-approve" onclick={Callback::from(move |_| approve.emit(decision_for_approve.id))}>
@@ -1076,6 +1163,30 @@ fn decision_inbox() -> Html {
                 html! {}
             }}
         </div>
+    }
+}
+
+/// The date a row should show: when the email arrived, not when the triage
+/// pipeline got round to scraping it. A proposal made today about a message
+/// from three weeks ago is a three-week-old thing, and dating it "today"
+/// hides exactly the staleness the reviewer is judging.
+fn email_or_decision_date(
+    email: Option<&DecisionEmailContext>,
+    decided_at: DateTime<Utc>,
+) -> DateTime<Utc> {
+    email.map(|e| e.received_at).unwrap_or(decided_at)
+}
+
+/// Says which of the two dates is on screen, so the distinction is
+/// discoverable rather than something the reviewer has to infer.
+fn date_tooltip(email: Option<&DecisionEmailContext>, decided_at: DateTime<Utc>) -> String {
+    match email {
+        Some(e) => format!(
+            "Email received {}\nProposed {}",
+            e.received_at.format("%Y-%m-%d %H:%M"),
+            decided_at.format("%Y-%m-%d %H:%M")
+        ),
+        None => format!("Proposed {}", decided_at.format("%Y-%m-%d %H:%M")),
     }
 }
 
@@ -1128,7 +1239,7 @@ struct DecisionGroupCardProps {
     on_reject: Callback<(Uuid, Option<String>)>,
     on_approve_many: Callback<Vec<Uuid>>,
     on_reject_many: Callback<Vec<Uuid>>,
-    on_open: Callback<AgentDecisionResponse>,
+    on_open: Callback<PendingDecisionItem>,
 }
 
 /// One sender's pending decisions of a single kind. The header carries the
@@ -1220,7 +1331,16 @@ fn decision_group_card(props: &DecisionGroupCardProps) -> Html {
                     }}
                 </div>
                 <span class="group-count">{format!("{}", count)}</span>
-                <span class="decision-time">{group.latest_at.format("%b %d, %H:%M").to_string()}</span>
+                <span class="decision-time" title="Newest email in this group">
+                    {group
+                        .items
+                        .iter()
+                        .filter_map(|i| i.email.as_ref().map(|e| e.received_at))
+                        .max()
+                        .unwrap_or(group.latest_at)
+                        .format("%b %d, %H:%M")
+                        .to_string()}
+                </span>
                 <div class="decision-group-actions">
                     <button class="btn-approve" onclick={approve_all}>
                         {format!("Approve all ({})", count)}
@@ -1280,7 +1400,7 @@ struct DecisionRowProps {
     on_toggle: Callback<Uuid>,
     on_approve: Callback<Uuid>,
     on_reject: Callback<(Uuid, Option<String>)>,
-    on_open: Callback<AgentDecisionResponse>,
+    on_open: Callback<PendingDecisionItem>,
 }
 
 #[function_component(DecisionRow)]
@@ -1308,8 +1428,8 @@ fn decision_row(props: &DecisionRowProps) -> Html {
     };
     let open = {
         let on_open = props.on_open.clone();
-        let decision = decision.clone();
-        Callback::from(move |_| on_open.emit(decision.clone()))
+        let item = props.item.clone();
+        Callback::from(move |_| on_open.emit(item.clone()))
     };
     let approve = {
         let on_approve = props.on_approve.clone();
@@ -1341,8 +1461,10 @@ fn decision_row(props: &DecisionRowProps) -> Html {
                     <span class={format!("confidence-badge {}", decision.confidence_level)}>
                         {format!("{}% confident", (decision.confidence * 100.0) as i32)}
                     </span>
-                    <span class="decision-time">
-                        {decision.created_at.format("%b %d, %H:%M").to_string()}
+                    <span class="decision-time" title={date_tooltip(props.item.email.as_ref(), decision.created_at)}>
+                        {email_or_decision_date(props.item.email.as_ref(), decision.created_at)
+                            .format("%b %d, %H:%M")
+                            .to_string()}
                     </span>
                 </div>
 
@@ -1468,6 +1590,9 @@ fn event_preview_card(props: &EventPreviewProps) -> Html {
 #[derive(Properties, PartialEq, Clone)]
 struct DecisionDetailProps {
     decision: AgentDecisionResponse,
+    /// Source email, when the decision came from one
+    #[prop_or_default]
+    email: Option<DecisionEmailContext>,
 }
 
 #[function_component(DecisionDetailView)]
@@ -1582,7 +1707,14 @@ fn decision_detail_view(props: &DecisionDetailProps) -> Html {
 
             <div class="detail-section">
                 <h4>{"Timeline"}</h4>
-                <p>{format!("Created: {}", decision.created_at.format("%Y-%m-%d %H:%M:%S"))}</p>
+                {if let Some(email) = &props.email {
+                    html! {
+                        <p>{format!("Email received: {}", email.received_at.format("%Y-%m-%d %H:%M:%S"))}</p>
+                    }
+                } else {
+                    html! {}
+                }}
+                <p>{format!("Proposed: {}", decision.created_at.format("%Y-%m-%d %H:%M:%S"))}</p>
                 {if let Some(reviewed) = decision.reviewed_at {
                     html! { <p>{format!("Reviewed: {}", reviewed.format("%Y-%m-%d %H:%M:%S"))}</p> }
                 } else {
@@ -1766,6 +1898,7 @@ fn decision_log() -> Html {
                         ("rejected", "Rejected"),
                         ("auto_approved", "Auto-approved"),
                         ("executed", "Executed"),
+                        ("withdrawn", "Withdrawn"),
                     ].into_iter().map(|(value, label)| html! {
                         <option key={value} value={value} selected={*filter == value}>{label}</option>
                     }).collect::<Html>()}
@@ -1801,6 +1934,7 @@ fn decision_log() -> Html {
                                         "approved" | "executed" => "status-approved",
                                         "rejected" => "status-rejected",
                                         "auto_approved" => "status-auto",
+                                        "withdrawn" => "status-withdrawn",
                                         _ => "",
                                     };
 
@@ -3622,13 +3756,20 @@ fn archive_review_panel() -> Html {
 /// Pipeline infrastructure screen: triage mode, health, and stage counts
 #[function_component(PipelineView)]
 fn pipeline_view() -> Html {
+    let ctx = use_app_context();
     let stats = use_state(|| None::<PipelineStatsResponse>);
     let error = use_state(|| None::<String>);
+    let reload = use_state(|| 0u32);
+    // Re-triage discards the whole review queue, so it is deliberately two
+    // clicks: the second button only exists once the first is pressed.
+    let confirming_retriage = use_state(|| false);
+    let retriaging = use_state(|| false);
+    let retriage_result = use_state(|| None::<RetriageResponse>);
 
     {
         let stats = stats.clone();
         let error = error.clone();
-        use_effect_with((), move |_| {
+        use_effect_with(*reload, move |_| {
             let stats = stats.clone();
             let error = error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -3644,6 +3785,35 @@ fn pipeline_view() -> Html {
             || ()
         });
     }
+
+    let on_retriage = {
+        let confirming_retriage = confirming_retriage.clone();
+        let retriaging = retriaging.clone();
+        let retriage_result = retriage_result.clone();
+        let reload = reload.clone();
+        let refresh_pending = ctx.refresh_pending_count.clone();
+        Callback::from(move |_| {
+            let confirming_retriage = confirming_retriage.clone();
+            let retriaging = retriaging.clone();
+            let retriage_result = retriage_result.clone();
+            let reload = reload.clone();
+            let refresh_pending = refresh_pending.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                retriaging.set(true);
+                if let Ok(response) = Request::post("/api/pipeline/retriage").send().await {
+                    if response.ok() {
+                        if let Ok(result) = response.json::<RetriageResponse>().await {
+                            retriage_result.set(Some(result));
+                            reload.set(*reload + 1);
+                            refresh_pending.emit(());
+                        }
+                    }
+                }
+                retriaging.set(false);
+                confirming_retriage.set(false);
+            });
+        })
+    };
 
     let stage_order = [
         ("pending", "Pending screening"),
@@ -3701,6 +3871,59 @@ fn pipeline_view() -> Html {
                                     </div>
                                 }
                             }).collect::<Html>()}
+                        </div>
+
+                        <div class="pipeline-danger-zone">
+                            <h4>{"Flush and re-triage"}</h4>
+                            <p class="pipeline-danger-note">
+                                {"Sends every live email back to the front of the pipeline so all                                   three agent passes run again — for when the rules have changed                                   and the existing verdicts are stale. Emails already archived in                                   Gmail are left settled, and nothing is re-fetched from Gmail.                                   Pending proposals are withdrawn, not deleted, so the old queue                                   stays in the Decision Log. Expect a full triage run, and expect                                   it to take many cycles to drain."}
+                            </p>
+                            {if *confirming_retriage {
+                                let cancel = {
+                                    let confirming_retriage = confirming_retriage.clone();
+                                    Callback::from(move |_| confirming_retriage.set(false))
+                                };
+                                html! {
+                                    <div class="pipeline-danger-actions">
+                                        <button class="btn-reject" disabled={*retriaging} onclick={on_retriage.clone()}>
+                                            {if *retriaging { "Flushing..." } else { "Yes, flush and re-triage everything" }}
+                                        </button>
+                                        <button class="btn-secondary" disabled={*retriaging} onclick={cancel}>
+                                            {"Cancel"}
+                                        </button>
+                                    </div>
+                                }
+                            } else {
+                                let start = {
+                                    let confirming_retriage = confirming_retriage.clone();
+                                    Callback::from(move |_| confirming_retriage.set(true))
+                                };
+                                html! {
+                                    <button class="btn-secondary" onclick={start}>
+                                        {"Flush and re-triage..."}
+                                    </button>
+                                }
+                            }}
+                            {if let Some(r) = &*retriage_result {
+                                html! {
+                                    <div class="rescan-result">
+                                        <span class="rescan-summary">
+                                            {format!(
+                                                "Reset {} email(s); withdrew {} pending proposal(s)",
+                                                r.emails_reset, r.decisions_withdrawn
+                                            )}
+                                        </span>
+                                        <div class="rescan-detail">
+                                            {format!(
+                                                "{} already archived in Gmail were left alone.                                                  Re-triage runs in the background over the next cycles.",
+                                                r.emails_skipped
+                                            )}
+                                        </div>
+                                    </div>
+                                }
+                            } else {
+                                html! {}
+                            }}
                         </div>
                     </>
                 }

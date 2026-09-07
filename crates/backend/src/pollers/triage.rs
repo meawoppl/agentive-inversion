@@ -28,6 +28,10 @@ use crate::services::triage::gmail_permalink;
 pub struct TriageHealthState {
     pub mode: String,
     pub last_cycle_at: Option<DateTime<Utc>>,
+    /// When the loop will wake up next. Recorded as the sleep starts rather
+    /// than derived from last_cycle_at + interval, so it stays truthful when
+    /// a cycle is skipped (no credential) or runs long.
+    pub next_cycle_at: Option<DateTime<Utc>>,
     pub last_cycle_error: Option<String>,
     pub consecutive_failures: i32,
 }
@@ -37,6 +41,7 @@ impl Default for TriageHealthState {
         Self {
             mode: "starting".to_string(),
             last_cycle_at: None,
+            next_cycle_at: None,
             last_cycle_error: None,
             consecutive_failures: 0,
         }
@@ -241,6 +246,11 @@ pub async fn start_triage_task(pool: DbPool, auth_config: Arc<AuthConfig>, healt
             }
         }
 
+        health.write().await.next_cycle_at = Some(
+            Utc::now()
+                + chrono::Duration::from_std(config.poll_interval)
+                    .unwrap_or_else(|_| chrono::Duration::seconds(300)),
+        );
         tokio::time::sleep(config.poll_interval).await;
     }
 }

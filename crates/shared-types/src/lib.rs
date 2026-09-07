@@ -437,6 +437,8 @@ pub struct PipelineStatsResponse {
     /// "agentic" or "disabled" (no API key / claude binary)
     pub mode: String,
     pub last_cycle_at: Option<DateTime<Utc>>,
+    /// When the poller next wakes up; absent before the first sleep
+    pub next_cycle_at: Option<DateTime<Utc>>,
     pub last_cycle_error: Option<String>,
     pub consecutive_failures: i32,
     pub stage_counts: Vec<TriageStageCount>,
@@ -1440,6 +1442,35 @@ mod serde_roundtrip_tests {
             more_remaining: false,
         };
         assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn pipeline_stats_response_roundtrips() {
+        // Monitoring reads this shape; the field names are the contract
+        let value = PipelineStatsResponse {
+            mode: "agentic".to_string(),
+            last_cycle_at: Some(Utc::now()),
+            next_cycle_at: Some(Utc::now() + chrono::Duration::minutes(5)),
+            last_cycle_error: None,
+            consecutive_failures: 0,
+            stage_counts: vec![TriageStageCount {
+                status: "pending".to_string(),
+                count: 40,
+            }],
+        };
+        assert_eq!(roundtrip(&value), value);
+
+        let json = json_of(&value);
+        for field in [
+            "mode",
+            "last_cycle_at",
+            "next_cycle_at",
+            "last_cycle_error",
+            "consecutive_failures",
+            "stage_counts",
+        ] {
+            assert!(json.contains(field), "{field} missing from {json}");
+        }
     }
 
     #[test]

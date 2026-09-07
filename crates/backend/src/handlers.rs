@@ -314,6 +314,7 @@ pub async fn get_pipeline_stats(
     Ok(Json(PipelineStatsResponse {
         mode: health.mode,
         last_cycle_at: health.last_cycle_at,
+        next_cycle_at: health.next_cycle_at,
         last_cycle_error: health.last_cycle_error,
         consecutive_failures: health.consecutive_failures,
         stage_counts: counts

@@ -580,6 +580,10 @@ pub async fn get_archive_review(
                 confidence: d.confidence,
                 reasoning: d.reasoning.clone(),
                 decided_at: d.created_at,
+                gmail_link: crate::services::triage::gmail_permalink(
+                    &account_email,
+                    &email.gmail_id,
+                ),
                 account_email,
                 subject: email.subject.clone(),
                 from_address: email.from_address.clone(),
@@ -724,13 +728,26 @@ pub async fn list_pending_decisions(
 
     let page_email_ids: Vec<Uuid> = by_id.values().filter_map(|d| d.source_id).collect();
     let page_emails = emails::list_by_ids(&mut conn, &page_email_ids).await?;
+    // Gmail permalinks are per-mailbox, so the link needs the account the
+    // message landed in, not just the message
+    let accounts = google_accounts::list_all(&mut conn).await?;
+    let account_email_by_id: std::collections::HashMap<Uuid, String> =
+        accounts.into_iter().map(|a| (a.id, a.email)).collect();
     let email_by_id: std::collections::HashMap<Uuid, DecisionEmailContext> = page_emails
         .into_iter()
         .map(|e| {
+            let account_email = account_email_by_id
+                .get(&e.account_id)
+                .cloned()
+                .unwrap_or_default();
             (
                 e.id,
                 DecisionEmailContext {
                     email_id: e.id,
+                    gmail_link: crate::services::triage::gmail_permalink(
+                        &account_email,
+                        &e.gmail_id,
+                    ),
                     subject: e.subject,
                     from_address: e.from_address,
                     from_name: e.from_name,

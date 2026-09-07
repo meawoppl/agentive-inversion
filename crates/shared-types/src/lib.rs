@@ -415,6 +415,8 @@ pub struct ArchiveReviewItem {
     pub reasoning: String,
     pub decided_at: DateTime<Utc>,
     pub account_email: String,
+    /// Permalink to the message in the account's own Gmail UI
+    pub gmail_link: String,
     pub subject: String,
     pub from_address: String,
     pub from_name: Option<String>,
@@ -751,6 +753,10 @@ pub struct DecisionStats {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecisionEmailContext {
     pub email_id: Uuid,
+    /// Permalink to the message in the account's own Gmail UI. Built
+    /// server-side from the account and the Gmail id — the frontend must not
+    /// reconstruct the URL, and cannot: it never sees the gmail_id.
+    pub gmail_link: String,
     pub subject: String,
     pub from_address: String,
     pub from_name: Option<String>,
@@ -1370,6 +1376,7 @@ mod serde_roundtrip_tests {
     fn decision_email_context_roundtrips() {
         let value = DecisionEmailContext {
             email_id: Uuid::new_v4(),
+            gmail_link: "https://mail.google.com/mail/u/matt@example.com/#all/18c2f0a".to_string(),
             subject: "Your statement is ready".to_string(),
             from_address: "no-reply@bank.example".to_string(),
             from_name: Some("Example Bank".to_string()),

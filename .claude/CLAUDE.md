@@ -41,6 +41,23 @@ This is a Rust workspace with 3 crates:
 - Only use `serde_json::Value` at API boundaries when parsing/serializing, convert to typed structs immediately
 - Define explicit types for all data structures in `shared-types` crate
 
+### Linking Back to the Source Email
+- Every surface that names a source email links to it. The permalink is built
+  **server-side** by `gmail_permalink` and shipped as `gmail_link` on
+  `DecisionEmailContext` and `ArchiveReviewItem` — the frontend must not
+  reconstruct the URL and cannot: it never sees the `gmail_id`
+- Gmail permalinks are per-mailbox (`/mail/u/<account>/`), so the link needs
+  the account the message landed in. With several accounts connected, using
+  the wrong one silently opens the wrong mailbox — join through
+  `email.account_id`, never assume a single account
+- Approving a `create_todo` decision carries the permalink onto the todo's
+  `link`, which the Todos list already renders
+- Subjects that double as links use `.email-link`: plain text until hovered,
+  so a dense queue does not become a wall of blue. The standalone "open in
+  Gmail" action uses `.source-email-link` and looks like a link. Subjects
+  inside a click-to-open row must `stop_propagation`, or the click both
+  navigates and opens the modal
+
 ### Dates in Decision Surfaces
 - Proposal rows, group headers and the detail modal show the **email's
   received date**, not the decision's `created_at`. A proposal made today

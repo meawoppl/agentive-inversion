@@ -266,5 +266,7 @@ pub async fn revoke(
         .bind::<SqlUuid, _>(id)
         .execute(&mut c)
         .await?;
+    sql_query("UPDATE connector_claims SET expires_at=now() WHERE connection_id=$1 AND completed_at IS NULL")
+        .bind::<SqlUuid,_>(id).execute(&mut c).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

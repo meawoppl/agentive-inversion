@@ -90,6 +90,13 @@ async fn connector_database_contract() {
     for (id, aid) in [(email, account), (hidden, other)] {
         sql_query("INSERT INTO emails(id,account_id,gmail_id,thread_id,subject,from_address,to_addresses,body_text,received_at) VALUES($1,$2,$3,'thread','Test','sender@example.com',ARRAY['owner@example.com'],'Private body',now())").bind::<SqlUuid,_>(id).bind::<SqlUuid,_>(aid).bind::<Text,_>(id.to_string()).execute(&mut c).await.unwrap();
     }
+    sql_query("UPDATE emails SET processed=true WHERE id=$1")
+        .bind::<SqlUuid, _>(email)
+        .execute(&mut c)
+        .await
+        .unwrap();
+    sql_query("INSERT INTO agent_decisions(id,source_type,source_id,decision_type,proposed_action,reasoning,confidence,status) VALUES($1,'email',$2,'archive','{}','legacy pending',0.9,'proposed')")
+        .bind::<SqlUuid,_>(Uuid::new_v4()).bind::<SqlUuid,_>(email).execute(&mut c).await.unwrap();
     drop(c);
     async fn call(
         app: &axum::Router,

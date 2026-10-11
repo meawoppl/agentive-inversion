@@ -167,6 +167,7 @@ pub async fn run(state: AppState) {
 }
 pub(super) async fn tick(state: &AppState) -> anyhow::Result<()> {
     let mut c = state.pool.get().await?;
+    sql_query("UPDATE connector_actions a SET status='cancelled',error='Proposing connection expired or revoked',updated_at=now() WHERE status IN ('proposed','queued') AND NOT EXISTS (SELECT 1 FROM connector_connections c WHERE c.id=a.connection_id AND c.revoked_at IS NULL AND c.expires_at>now())").execute(&mut c).await?;
     sql_query("UPDATE connector_actions SET status='unknown',error='Worker interrupted; inspect provider before any retry',updated_at=now() WHERE status='running' AND updated_at<now()-interval '10 minutes'").execute(&mut c).await?;
     let row=sql_query("UPDATE connector_actions SET status='running',updated_at=now() WHERE id=(SELECT id FROM connector_actions WHERE status='queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *").get_result::<ActionRow>(&mut c).await.optional()?;
     let Some(row) = row else { return Ok(()) };

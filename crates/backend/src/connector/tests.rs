@@ -206,6 +206,38 @@ async fn connector_database_contract() {
     }
     let (agent, agent_id) = pair(&app, &admin, account, false).await;
     let (reviewer, _) = pair(&app, &admin, account, true).await;
+    // Docs authorization is checked before touching Google or refreshing tokens.
+    for (path, expected) in [
+        (
+            format!("/api/v1/documents/example?account_id={other}"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            format!("/api/v1/documents/bad:id?account_id={account}"),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, _) = call(&app, "GET", &path, Some(&agent), None, json!(null), None).await;
+        assert_eq!(status, expected);
+    }
+    let (_, login) = call(
+        &app,
+        "GET",
+        "/api/auth/login",
+        None,
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    let url = reqwest::Url::parse(login["auth_url"].as_str().unwrap()).unwrap();
+    let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
+    assert!(query["scope"]
+        .split_whitespace()
+        .any(|scope| scope == super::documents::DOCS_SCOPE));
+    assert_eq!(query["include_granted_scopes"], "true");
+    assert_eq!(query["prompt"], "consent");
+
     let (s, source) = call(
         &app,
         "GET",

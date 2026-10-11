@@ -156,3 +156,20 @@ mailbox subset. The legacy application is read-only, so pagination is stable aft
 cutover. Keep IDs, dates, status, rationale, and references. Export omits Google
 credentials and raw source mail. Legacy proposals remain historical records;
 review them in Portal before converting any into new provider effects.
+
+## Read Google Docs
+
+`GET /api/v1/documents/{document_id}?account_id={uuid}` requires `sources:read`
+and an account included in the connection grant. Returns Google Docs document
+JSON with all tab contents (`includeTabsContent=true`), including nested tabs and
+tables. Pass the document ID from its URL, not an arbitrary URL. This endpoint
+performs no writes and does not persist document bodies.
+
+Google OAuth now requests `https://www.googleapis.com/auth/documents.readonly`
+in addition to the existing Gmail and Calendar scopes. Existing accounts must use
+**Connect or refresh a Google account** on the hosted site and consent to the new
+permission; old refresh tokens do not acquire it automatically. Enable the Google
+Docs API in the same Google Cloud project if it is not already enabled. OAuth stays
+on the hosted site. This grants document reads, not Drive search or document edits.
+
+Reference: https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/get

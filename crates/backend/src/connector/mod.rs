@@ -1,6 +1,7 @@
 //! Hosted connector: source access, delegated credentials, work leases and effects.
 mod actions;
 mod auth;
+pub(crate) mod documents;
 mod models;
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/connections", get(auth::connections))
         .route("/connections/:id/revoke", post(auth::revoke))
         .route("/calendar/events", get(calendar_events))
+        .route("/documents/:id", get(documents::get))
         .route("/sources", get(work::sources))
         .route("/sources/:id", get(work::get_source))
         .route("/work/claims", post(work::claim))

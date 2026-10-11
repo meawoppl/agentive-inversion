@@ -3,7 +3,7 @@
 help:
 	@echo "Available commands:"
 	@echo "  make frontend        - Build the frontend (required before the backend compiles)"
-	@echo "  make build           - Build the release binary the Docker image copies"
+	@echo "  make build           - Build release binaries (Docker requires a compatible Linux host)"
 	@echo "  make docker-up       - Start all services with Docker"
 	@echo "  make docker-down     - Stop all services"
 	@echo "  make docker-rebuild  - Rebuild and restart services"
@@ -21,7 +21,7 @@ frontend:
 	cd crates/frontend && trunk build --release
 
 build: frontend
-	cargo build --release --bin backend
+	cargo build --release --locked --bin backend --bin agent-cli
 
 # The image copies target/release/backend rather than compiling in Docker.
 docker-up: build

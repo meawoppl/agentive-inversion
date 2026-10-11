@@ -117,7 +117,8 @@ comment in `crates/backend/Cargo.toml`.
 ### API Integration
 - Gmail and Calendar APIs use OAuth2 via `yup-oauth2`
 - Client credentials stored in environment variables
-- Polling services run every 5 minutes
+- Gmail and triage default to 5-minute intervals; the calendar stub defaults
+  to 15 minutes
 
 ## File Locations
 
@@ -137,7 +138,8 @@ comment in `crates/backend/Cargo.toml`.
 - Backend handlers: `crates/backend/src/handlers.rs`
 - Database layer: `crates/backend/src/db.rs`
 - Shared models: `crates/shared-types/src/lib.rs`
-- Frontend components: `crates/frontend/src/main.rs`
+- Frontend entrypoint: `crates/frontend/src/main.rs`; app shell and feature
+  components live in sibling modules (see ARCHITECTURE.md)
 
 ### CI/CD
 - Test workflow: `.github/workflows/ci.yml`
@@ -151,10 +153,10 @@ comment in `crates/backend/Cargo.toml`.
 
 ### Development
 ```bash
-cd crates/frontend && trunk build  # Required before the backend compiles
+(cd crates/frontend && trunk build)  # Required before the backend compiles
 cargo run --bin backend            # Start backend server (includes pollers)
-cargo run --bin backend -- --dev-mode  # ... without the Gmail/Calendar pollers
-cd crates/frontend && trunk serve  # Frontend dev server with live reload
+cargo run --bin backend -- --dev-mode  # ... without ingestion, triage, or calendar polling
+cd crates/frontend && trunk serve --proxy-backend http://localhost:3000/api/  # Live reload
 ```
 
 ### Testing
@@ -205,7 +207,7 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
 
 ### Agentic Triage Pipeline
 - Lives in `crates/backend/src/pollers/triage.rs` (orchestrator) + `services/triage.rs` (policy)
-- Three Claude Code sessions per cycle via the `claude-codes` crate: Haiku screening, Sonnet 4.5 archive determinations (auto-executed, Gmail label `agent-archived`), Opus 4.8 action pass (reads about_me, proposes todos)
+- Three Claude Code sessions per cycle via the `claude-codes` crate: Haiku screening, Sonnet 4.5 archive determinations (proposals by default; `TRIAGE_ARCHIVE_MODE=execute` applies Gmail label `agent-archived`), Opus 4.8 action pass (reads about_me, proposes todos)
 - Agents act ONLY through the `agent-cli` binary -> REST API (`POST /api/triage/decisions`); never give agents direct DB access
 - INVARIANT: ingestion is never gated on triage; Anthropic/API failures must never touch Gmail-sync health or backoff (separate failure domains)
 - Calendar writes are gated: agents propose `create_calendar_event` decisions; approval executes to the "Agent" calendar

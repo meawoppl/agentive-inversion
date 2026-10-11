@@ -1,146 +1,105 @@
 # Quick Start Guide
 
+Run commands from the repository root unless stated otherwise.
+
 ## Prerequisites
 
-Install the following tools:
+- Current stable Rust with Cargo, rustfmt, and Clippy.
+- Trunk (CI uses v0.21.14) and the WASM target:
 
-```bash
-# Rust and cargo
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```bash
+  rustup target add wasm32-unknown-unknown
+  ```
 
-# WASM target for frontend
-rustup target add wasm32-unknown-unknown
+- PostgreSQL and its native client development libraries (`libpq`).
+- Google OAuth web application credentials with Gmail and Calendar APIs enabled.
 
-# Diesel CLI for database migrations
-cargo install diesel_cli --no-default-features --features postgres
+The server runs migrations automatically. Install Diesel CLI only if you need
+to create, inspect, or revert migrations during development.
 
-# Trunk for building the frontend
-cargo install trunk
-```
-
-## Setup Steps
-
-### 1. Clone and Navigate
-
-```bash
-cd agentive-inversion
-```
-
-### 2. Set Up Environment
+## Configure and run
 
 ```bash
 cp .env.example .env
-# Edit .env with your actual values:
-# - DATABASE_URL: Your PostgreSQL connection string
-# - Gmail and Calendar API credentials from Google Cloud Console
 ```
 
-### 3. Build the Frontend
+Edit `.env` with your database connection and authentication settings:
 
-Required before the backend will compile — `memory-serve` embeds
-`crates/frontend/dist` into the binary at compile time:
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | Connection to an existing PostgreSQL database |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google OAuth web application credentials |
+| `JWT_SECRET` | Generate with `openssl rand -hex 32` |
+| `ALLOWED_EMAILS` | Comma-separated Google account emails permitted to log in |
+| `AUTH_REDIRECT_URI` | `http://localhost:3000/api/auth/callback` |
+
+Register that exact callback in the OAuth client's authorized redirect URIs.
+Login connects the Google account; do not insert refresh tokens manually.
 
 ```bash
-cd crates/frontend && trunk build
+(cd crates/frontend && trunk build)
+cargo run --bin backend -- --dev-mode
 ```
 
-### 4. Start All Services
+Visit http://localhost:3000. Dev mode skips all three background tasks (Gmail,
+triage, and the calendar stub), but still requires authentication and a database.
 
-The backend applies its embedded migrations on startup, so there is no separate
-migration step.
+## Enable ingestion and triage
 
-Open 2 terminal windows:
+Run the backend without `--dev-mode` to enable background tasks. For triage,
+install the Claude Code CLI and put the project's agent CLI on `PATH`:
 
-**Terminal 1 - Backend (API, embedded frontend, and the pollers):**
 ```bash
+cargo build --locked --bin agent-cli
+export PATH="$PWD/target/debug:$PATH"
 cargo run --bin backend
-# Backend will start on http://localhost:3000
-# Add --dev-mode to skip starting the Gmail and Calendar pollers
 ```
 
-**Terminal 2 - Frontend with live reload (optional):**
+Use the UI's Claude login or set `ANTHROPIC_API_KEY`. Without credentials,
+emails still ingest and remain pending. Archive decisions default to review;
+see `.env.example` for execution policy, forwarding destination, and model
+settings. Calendar polling is not implemented, although event proposals can
+be checked against Google calendars and approved events can be created there.
+
+## Frontend live reload
+
+With the backend running on port 3000, use another terminal:
+
 ```bash
 cd crates/frontend
-trunk serve
-# Frontend will start on http://localhost:8080
+trunk serve --proxy-backend http://localhost:3000/api/
 ```
 
-### 5. Access the Application
+Visit http://localhost:8080. The proxy sends relative `/api` requests to the
+backend. OAuth returns to the callback configured in `.env` (port 3000 by
+default); return to port 8080 after login to use live reload.
 
-Open your browser to: http://localhost:8080
+When serving built assets through the backend, rebuild it after every
+`trunk build`; the compiled asset manifest must match the files in `dist`.
 
-## Development Workflow
-
-### Making Changes
-
-1. Edit code in your preferred editor
-2. The frontend will auto-reload with Trunk's hot reload
-3. Backend requires restart: Ctrl+C and re-run `cargo run --bin backend`
-
-### Before Committing
+## Before committing
 
 ```bash
-# Format code
-cargo fmt
-
-# Check for issues
-cargo clippy --workspace --all-features
-
-# Run tests
-cargo test --workspace
+(cd crates/frontend && trunk build)
+cargo fmt --all --check
+RUSTFLAGS=-Dwarnings cargo clippy --workspace --all-targets --locked
+cargo test --workspace --locked
+./scripts/check-migration-names.sh
+cargo audit
 ```
 
-## Google API Setup
-
-### Gmail API
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a new project or select existing
-3. Enable Gmail API
-4. Create OAuth 2.0 credentials (Desktop app)
-5. Download credentials JSON
-6. Add client ID and secret to `.env`
-
-### Calendar API
-
-1. In the same Google Cloud project
-2. Enable Google Calendar API
-3. Use same OAuth credentials or create new ones
-4. Add credentials to `.env`
+Tests do not require a running database. The frontend build must precede backend
+compilation because `memory-serve` reads its assets at compile time.
 
 ## Troubleshooting
 
-### Database Connection Issues
-```bash
-# Test connection string
-psql $DATABASE_URL
+- Database startup errors: confirm the database exists and `DATABASE_URL` is
+  correct. A migration failure is logged and prevents the server from serving.
+- Login errors: check the email allowlist, OAuth client, and exact callback URI.
+- Missing `frontend/dist`: run the frontend build before compiling the backend.
+- Blank page after rebuilding assets: rebuild and restart the backend too.
+- Triage disabled: check the Claude credential and that both `claude` and
+  `agent-cli` are available to the backend process.
 
-# Verify migrations
-diesel migration list
-```
-
-### Frontend Build Issues
-```bash
-# Clear trunk cache
-rm -rf crates/frontend/dist
-
-# Rebuild — the backend will not compile until this directory exists again
-cd crates/frontend && trunk build
-```
-
-### Dependency Issues
-```bash
-# Clean and rebuild
-cargo clean
-cargo build
-```
-
-## Next Steps
-
-- Configure email accounts in the database
-- Set up calendar sync
-- Customize todo parsing logic
-- Deploy to production
-
-See [README.md](README.md) for full documentation.
-See [ARCHITECTURE.md](ARCHITECTURE.md) for system design details.
+See [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
+[DOCKER.md](DOCKER.md) for more detail.

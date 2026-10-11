@@ -1,223 +1,127 @@
 # Agentive Inversion
 
-A self-updating todo list application built in Rust that automatically syncs tasks from multiple sources including Gmail accounts and Google Calendar.
+A personal email-to-action application built entirely in Rust. It ingests mail
+from connected Gmail accounts, classifies it with Claude Code sessions, and
+presents proposed actions for review.
+
+## What works today
+
+- Gmail incremental sync and history backfill across connected accounts.
+- Three-stage triage: Haiku screening, Sonnet archive determinations, and an
+  Opus action pass informed by your About Me document.
+- A grouped, paginated decision inbox and decision log with source-email links.
+- Todo creation, completion, due dates, categories, and source tracking.
+- Archive review bundles and unsubscribe actions. Archiving defaults to proposals;
+  `TRIAGE_ARCHIVE_MODE=execute` enables automatic archive execution.
+- Approval-gated receipt forwarding and event creation in the Google “Agent”
+  calendar, with duplicate checks against connected calendars.
+- Pipeline health, local timestamps, queued-event rescans, and re-triage controls.
+- Google OAuth login, an email allowlist, and a chat widget with stored history
+  and intent-based responses.
+
+Calendar ingestion is still a stub: the calendar views read the local event
+table, which the poller does not populate. Live duplicate checks and approved
+calendar writes use Google directly. The app has a shared workspace; an email
+allowlist does not provide separate per-user data.
 
 ## Architecture
 
-This project uses a Rust workspace with the following crates:
+| Crate | Responsibility |
+| --- | --- |
+| `crates/frontend` | Yew/WASM UI, built with Trunk, organized into feature modules |
+| `crates/backend` | Axum API, authentication, PostgreSQL/Diesel, background ingestion and triage |
+| `crates/shared-types` | Typed API contracts and domain models shared by both |
 
-### Frontend (`crates/frontend`)
-- **Framework**: Yew (React-like framework for Rust/WASM)
-- **Build Tool**: Trunk
-- **Purpose**: Web UI for viewing and managing todos
-- **Port**: 8080
-
-### Backend (`crates/backend`)
-- **Framework**: Axum (async web framework)
-- **Database**: PostgreSQL with Diesel ORM (self-hosted Postgres 17 container in production)
-- **Purpose**: REST API, plus background pollers (Gmail today, Calendar planned) that run as tokio tasks inside the server process
-- **Port**: 3000
-
-### Shared Types (`crates/shared-types`)
-- Common data structures used across all crates
-- Includes models for todos, google accounts, emails, calendar events, and agent decisions
-- Serialization support for both API and database
-
-## Data Flow
-
-```
-Gmail Accounts → Email Poller (in backend) → Database ← Backend API ← Frontend
+```text
+Gmail → ingestion → PostgreSQL → triage → proposed decisions
+                                             ↓ review
+                                   todos / Gmail / Calendar
 ```
 
-Emails are classified by the agentic triage pipeline (Claude Code sessions
-driven by the backend). Actionable ones become pending decisions in the
-decision inbox; approving a decision creates a todo.
+Ingestion and triage run independently: a classifier failure leaves emails
+pending without stopping Gmail sync. Agents submit actions through `agent-cli`
+and the backend REST API, rather than accessing the database directly.
 
-## Database Schema
+The backend serves the built frontend and API on port 3000. Release builds embed
+frontend assets and database migrations. Trunk optionally serves the UI on port
+8080 during development.
 
-### Tables
-- **todos**: Main todo items with source tracking
-- **google_accounts**: Connected Google accounts (OAuth refresh tokens for Gmail and Calendar)
-- **emails**: Fetched email metadata and bodies
-- **calendar_events**: Google Calendar events (poller not yet implemented)
-- **categories**: Todo categories
-- **agent_decisions**: Proposed actions awaiting review in the decision inbox
-- **chat_messages**: Chat widget history
+See [ARCHITECTURE.md](ARCHITECTURE.md) for data flow and module responsibilities.
 
-### Todo Sources
-- `Manual`: User-created todos
-- `Email`: Extracted from email
-- `Calendar`: Calendar events converted to todos
+## Local setup
 
-## Quick Testing with Docker
+Use a current stable Rust toolchain (as CI does), the `wasm32-unknown-unknown`
+target, Trunk (CI pins v0.21.14), PostgreSQL, and the native PostgreSQL client
+libraries needed by Diesel. Diesel CLI is optional for migration development;
+the server applies embedded migrations on startup.
 
-Want to see the UI without setting up everything? Use Docker:
+From the repository root:
 
 ```bash
-docker-compose up --build
-```
-
-Then open http://localhost:8080 in your browser. See [DOCKER.md](DOCKER.md) for details.
-
-## Prerequisites
-
-- Rust 1.70+ with `wasm32-unknown-unknown` target
-- PostgreSQL (any instance; production uses a self-hosted Postgres 17 container)
-- Diesel CLI: `cargo install diesel_cli --no-default-features --features postgres`
-- Trunk: `cargo install trunk`
-- Google Cloud project with Gmail and Calendar APIs enabled
-
-Or use Docker for testing (see above).
-
-## Setup
-
-### 1. Clone and Setup Environment
-
-```bash
-git clone <repository-url>
-cd agentive-inversion
 cp .env.example .env
-```
-
-### 2. Configure Environment Variables
-
-Edit `.env` with your configuration:
-
-```bash
-DATABASE_URL=postgres://user:password@localhost/agentive_inversion
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
-```
-
-### 3. Database Setup
-
-The server applies its embedded migrations on startup, so this is only needed
-when iterating on migrations locally:
-
-```bash
-diesel migration run
-```
-
-### 4. Install WASM Target
-
-```bash
 rustup target add wasm32-unknown-unknown
 ```
 
-## Development
-
-### Build the Frontend First
-
-`memory-serve` embeds `crates/frontend/dist` into the backend binary at compile
-time, so the directory must exist before the backend will build:
-
-```bash
-cd crates/frontend && trunk build
-```
-
-### Run All Services Locally
-
-Terminal 1 - Backend (serves the API, the embedded frontend, and the pollers on
-port 3000). Add `--dev-mode` to skip starting the Gmail and Calendar pollers:
-```bash
-cargo run --bin backend
-```
-
-Terminal 2 - Frontend with live reload (optional; port 8080, proxies to the
-backend):
-```bash
-cd crates/frontend
-trunk serve
-```
-
-### Run Tests
+Fill in `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`,
+`ALLOWED_EMAILS`, and `AUTH_REDIRECT_URI`. Generate the JWT secret with
+`openssl rand -hex 32`. Google login requires an OAuth web application client
+with Gmail and Calendar APIs enabled and a matching callback URL, locally
+`http://localhost:3000/api/auth/callback`.
 
 ```bash
-cargo test --workspace
+# Build assets before compiling the backend.
+(cd crates/frontend && trunk build)
+cargo run --bin backend -- --dev-mode
 ```
 
-### Format Code
+Open http://localhost:3000. `--dev-mode` skips Gmail ingestion, triage, and the
+calendar stub; login and database access are still required. Omit that flag to
+start background work. Triage also needs `claude` and `agent-cli` on `PATH`, plus
+a credential from the UI's Claude login or `ANTHROPIC_API_KEY`. Without a
+credential, ingestion continues and triage stays disabled.
+
+See [QUICKSTART.md](QUICKSTART.md) for development setup and
+[DOCKER.md](DOCKER.md) for the container build requirements. The Dockerfile
+copies prebuilt Linux binaries; it does not compile the application.
+
+## Development checks
+
+Build the frontend first, then run the same core checks as CI:
 
 ```bash
-cargo fmt
+cargo fmt --all --check
+RUSTFLAGS=-Dwarnings cargo clippy --workspace --all-targets --locked
+cargo test --workspace --locked
+./scripts/check-migration-names.sh
+cargo audit
 ```
 
-### Lint
+Tests do not require a live database. CI also builds the WASM frontend and
+checks dependency advisories. Rebuild the backend after rebuilding embedded
+assets so its asset manifest matches the frontend output.
 
-```bash
-cargo clippy --workspace --all-features
-```
+## API and source map
 
-## API Endpoints
+The authoritative route list is `build_app` in `crates/backend/src/main.rs`.
+Protected `/api` routes cover todos, categories, emails, decisions, pipeline
+controls, calendar events, chat, Google accounts, About Me, and Claude login.
+Google login routes and `/health` are public.
 
-### Todos
-- `GET /api/todos` - List all todos
-- `POST /api/todos` - Create a new todo
-- `PUT /api/todos/:id` - Update a todo
-- `DELETE /api/todos/:id` - Delete a todo
+- `crates/backend/src/pollers/`: Gmail ingestion, triage orchestration, calendar stub.
+- `crates/backend/src/services/`: decision execution, review grouping, triage policy,
+  calendar duplicate checks, and unsubscribe handling.
+- `crates/backend/src/auth/`: Google OAuth and JWT cookie sessions.
+- `crates/backend/src/schema.rs`: authoritative database schema.
+- `migrations/`: embedded Diesel migrations; applied names must never be changed.
+- `crates/frontend/src/`: app shell, shared state, formatting, and feature components.
 
-### Health Check
-- `GET /health` - Service health status
+## Delivery
 
-## Google API Setup
-
-### Gmail API
-1. Create a project in Google Cloud Console
-2. Enable Gmail API
-3. Create OAuth 2.0 credentials
-4. Add authorized redirect URIs
-5. Download credentials and update `.env`
-
-### Calendar API
-1. Enable Google Calendar API in the same project
-2. Use same OAuth 2.0 credentials or create separate ones
-3. Update `.env` with credentials
-
-## CI/CD
-
-GitHub Actions workflows:
-- **CI** (`ci.yml`): Runs on all PRs and pushes
-  - Rust tests
-  - Format check
-  - Clippy linting
-  - Frontend build
-  - Database migration tests
-
-- **Container** (`container.yml`): Runs on main branch and PRs
-  - Builds backend binary and frontend dist
-  - Pushes the combined image to `ghcr.io/meawoppl/agentive-inversion:main` on merge
-  - Production watches that tag and auto-deploys the new image within ~5 minutes
-
-## Project Structure
-
-```
-agentive-inversion/
-├── .github/
-│   └── workflows/          # GitHub Actions
-├── crates/
-│   ├── backend/           # Axum REST API + background pollers
-│   ├── frontend/          # Yew WASM app
-│   └── shared-types/      # Common types
-├── migrations/            # Diesel migrations (embedded into the binary)
-├── scripts/
-│   └── check-migration-names.sh  # CI lint for migration directory names
-├── Cargo.toml            # Workspace config
-├── diesel.toml           # Diesel config
-└── .env.example          # Environment template
-```
-
-## Future Enhancements
-
-- [ ] AI-powered email parsing for better todo extraction
-- [ ] Priority and categorization system
-- [ ] Multi-user support
-- [ ] Mobile responsive UI
-- [ ] Real-time updates via WebSockets
-- [ ] Todo completion tracking and analytics
-- [ ] Recurring todos
-- [ ] Due date reminders
-- [ ] Task dependencies
+GitHub Actions checks formatting, migrations' names, tests, Clippy, and dependency
+advisories. The container workflow builds the frontend, backend, and `agent-cli`,
+and publishes `ghcr.io/meawoppl/agentive-inversion:main` on main-branch pushes.
+The production host watches that tag for automatic deployment.
 
 ## License
 
-MIT
+[MIT](LICENSE).

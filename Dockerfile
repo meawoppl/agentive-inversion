@@ -15,7 +15,7 @@
 #   HOST                  - Bind address (default: 0.0.0.0)
 #   PORT                  - Bind port (default: 3000)
 #   RUST_LOG              - Log level (default: info)
-#   ANTHROPIC_API_KEY     - Enables the agentic triage pipeline (else keyword fallback)
+#   ANTHROPIC_API_KEY     - Optional triage credential (UI login is also supported)
 #   CORS_ALLOWED_ORIGINS  - Comma-separated allowed CORS origins
 
 FROM debian:trixie-slim
@@ -25,7 +25,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Node.js + Claude Code CLI for the agentic triage pipeline. Without these
-# (or without ANTHROPIC_API_KEY) the backend runs in keyword-fallback mode.
+# or a Claude credential, triage is disabled while Gmail ingestion continues.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g @anthropic-ai/claude-code && \

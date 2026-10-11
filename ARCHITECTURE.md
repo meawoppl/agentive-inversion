@@ -9,9 +9,28 @@
 
 Responsibilities:
 - Decision inbox: review, approve, or reject agent-proposed todos
-- Todo list UI (create, update, delete, sort, categorize)
+- Todo list UI (create, update, delete, complete, sort, categorize)
 - Decision log, category manager, calendar views, chat widget
 - Google login flow and connected-account status
+- Pipeline health, archive review, About Me context, and Claude login
+
+Frontend module boundaries:
+
+| Module | Responsibility |
+| --- | --- |
+| `main.rs` | Module declarations and renderer entrypoint |
+| `app.rs`, `context.rs` | Authentication state, navigation shell, shared view and pending count |
+| `login.rs`, `accounts.rs`, `claude_auth.rs` | Login and connected-account components |
+| `decisions/` | Inbox, log, group/row/detail components, event preview, decision formatting |
+| `archive_review/` | Review panel and pure queue grouping/reducer logic |
+| `todos.rs`, `categories.rs`, `calendar.rs`, `chat.rs` | Individual feature views |
+| `pipeline.rs`, `about_me.rs` | Pipeline controls and personal-context editor |
+| `time.rs` | Shared local/relative timestamp formatting |
+
+Feature modules use explicit imports. Decision and archive-review internals stay
+inside their modules; the app shell imports their public components. Keep shared
+state in `context.rs` and API contracts in `shared-types`, rather than creating
+cross-feature dependencies through the entrypoint.
 
 ### 2. Backend (Axum)
 **Location**: `crates/backend`
@@ -28,7 +47,13 @@ Responsibilities:
 - **Triage pipeline** (tokio background task): classifies pending emails via
   Claude Code sessions (Haiku screening, Sonnet archive determinations, Opus
   action pass), creating decisions through the agent-cli REST path
-- **Calendar poller** (tokio background task): currently a stub
+- **Calendar client**: live duplicate checks for event proposals and approved
+  writes to the Google “Agent” calendar
+- **Calendar poller** (tokio background task): currently a stub; it does not
+  populate the local event table used by calendar views
+- Archive proposals default to review (`TRIAGE_ARCHIVE_MODE=propose`);
+  `execute` enables automatic archiving. Receipt forwards and calendar writes
+  require approval
 
 ### 3. Shared Types
 **Location**: `crates/shared-types`
@@ -76,8 +101,10 @@ Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
   UNIQUE(account_id, google_event_id)
 - **categories** — id, name (unique), color
 - **agent_decisions** — proposed actions with reasoning, confidence, and
-  status (proposed / approved / rejected / auto_approved / executed)
+  status (proposed / approved / rejected / auto_approved / executed / withdrawn)
 - **chat_messages** — chat widget history
+- **about_me** — personal context supplied to action triage
+- **claude_credentials** — stored Claude login credential
 
 ## Authentication
 
@@ -87,16 +114,17 @@ Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
   allowlist, stores the refresh token in `google_accounts`, and sets an
   HttpOnly JWT cookie (7-day expiry, sliding refresh).
 - Connecting an additional Gmail account = logging in with it once.
+- Data is shared across the application; the allowlist is not per-user isolation.
 - Pollers authenticate to Google APIs with the stored refresh tokens via
   yup-oauth2.
 
 ## Deployment Architecture
 
 ### Development
-- Frontend: `trunk serve` (port 8080, proxies `/api` to the backend) for live
+- Frontend: `trunk serve --proxy-backend http://localhost:3000/api/` (port 8080) for live
   reload, or `trunk build` once and let the backend serve it on port 3000
-- Backend + pollers: `cargo run --bin backend` (port 3000). Pass `--dev-mode`
-  to skip starting the Gmail and Calendar pollers
+- Backend + pollers: `cargo run --bin backend` (port 3000). Pass `-- --dev-mode`
+  to skip Gmail ingestion, triage, and the calendar stub
 - Database: any PostgreSQL (local or docker-compose)
 
 ### Production
@@ -106,7 +134,8 @@ Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
 - Single backend container serves the API, pollers, and the frontend behind a
   TLS-terminating reverse proxy. The frontend is compiled into the binary by
   `memory-serve`, so the image carries only the binary — no `frontend/dist`,
-  no `migrations/`, no `psql`
+  no `migrations/`, no `psql`. The image also includes `agent-cli` and Claude
+  Code for triage; both Rust binaries are built for Linux before image creation
 - Database: self-hosted PostgreSQL 17 container with nightly dumps to S3
 - Migrations are embedded in the binary by `diesel_migrations` and applied by
   the server on startup, before it binds a port. A failed migration exits

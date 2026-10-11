@@ -1,262 +1,104 @@
-# Docker Testing Environment
+# Docker Development Environment
 
-This guide explains how to run the entire application stack using Docker for quick testing and development.
+Compose runs PostgreSQL 15 and one application container serving the frontend
+and API on http://localhost:3000. Authentication is required. It does not load
+sample data, and it starts the backend's background tasks by default.
 
-## Overview
+## Build requirements
 
-The Docker setup includes:
-- **PostgreSQL 15**: Database with test data
-- **App**: Single container serving both API and frontend
+The Dockerfile copies `target/release/backend` and `target/release/agent-cli`.
+Both must be **Linux binaries compatible with the image architecture**, with
+frontend assets embedded in the backend. Building native macOS binaries and
+copying them into this image will not work.
 
-Everything runs in containers with no external dependencies needed.
-
-## Prerequisites
-
-Install Docker and Docker Compose:
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Docker Compose)
-- Or Docker Engine + Docker Compose plugin
-
-## Quick Start
-
-### 1. Build the Binary
-
-The image copies a pre-built binary rather than compiling inside Docker, and
-the frontend is embedded into that binary at compile time. Build both first:
+The container workflow in `.github/workflows/container.yml` builds Linux x86-64
+artifacts on Ubuntu. To build locally, use a compatible Linux environment with
+Rust, Trunk, the WASM target, and PostgreSQL development libraries installed:
 
 ```bash
-cd crates/frontend && trunk build --release && cd ../..
-cargo build --release --bin backend
+(cd crates/frontend && trunk build --release)
+cargo build --release --locked --bin backend --bin agent-cli
 ```
 
-### 2. Start Everything
+Run the Docker build from a checkout containing those artifacts. Repeat both
+steps after source changes; `docker compose up --build` alone only rebuilds the
+image around the existing binaries.
+
+## Configure and start
 
 ```bash
-docker-compose up --build
+cp .env.example .env
 ```
 
-This will:
-1. Start PostgreSQL database
-2. Start the app, which applies its embedded migrations before serving
-
-### 3. Access the Application
-
-Once all services are running:
-- **Application**: http://localhost:3000
-- **Health Check**: http://localhost:3000/health
-- **API**: http://localhost:3000/api/*
-
-### 4. Stop Everything
+Set `JWT_SECRET`, `ALLOWED_EMAILS`, `GOOGLE_CLIENT_ID`, and
+`GOOGLE_CLIENT_SECRET`. Compose requires all four. Register the callback
+`http://localhost:3000/api/auth/callback` in the Google OAuth web application
+client. Compose provides that callback by default and overrides `DATABASE_URL`
+to point at its PostgreSQL service.
 
 ```bash
-# Stop and remove containers
-docker-compose down
-
-# Stop and remove containers + volumes (deletes database data)
-docker-compose down -v
+docker compose up --build
 ```
 
-## Test Data
+The database health check runs first. The application then applies its embedded
+migrations before serving requests.
 
-To load sample test data, use the dev script:
+- Application: http://localhost:3000
+- Health: http://localhost:3000/health
+- PostgreSQL: localhost:5432, database `agentive_inversion`
+
+The local database credentials are `testuser` / `testpassword`; replace them
+for deployments outside local development. Production uses PostgreSQL 17 and
+a TLS reverse proxy, separately from this Compose file.
+
+## Triage configuration
+
+The image includes Claude Code and `agent-cli`. Log in to Claude through the UI
+to enable triage, or explicitly pass `ANTHROPIC_API_KEY` into the app container.
+The Compose file passes only the environment variables listed in its `app`
+service: adding optional triage settings to `.env` alone does not pass them
+through. Add desired settings to that service's `environment` mapping.
+
+Without a Claude credential, Gmail ingestion continues and triage stays
+disabled. There is no keyword fallback. Archive mode defaults to `propose`.
+To disable background work locally, override the app command with
+`["/app/backend", "--dev-mode"]` in a Compose override file.
+
+## Routine commands
 
 ```bash
-./dev.sh db:seed
+# Logs
+docker compose logs -f app
+docker compose logs -f postgres
+
+# Inspect the database
+docker compose exec postgres psql -U testuser -d agentive_inversion
+
+# Stop containers, retaining database data
+docker compose down
+
+# Start only PostgreSQL (also usable for native backend development)
+docker compose up -d postgres
 ```
 
-This loads `seed-data.sql` which includes:
+To reset the database deliberately, `docker compose down -v` removes its volume.
+The next startup recreates the schema through migrations.
 
-**Sample Todos:**
-- 5 manual todos (including completed items)
-- 2 email-sourced todos
-- 3 calendar-sourced todos
-
-**Sample Accounts:**
-- 2 email accounts (work@example.com, personal@example.com)
-- 2 calendar accounts
-
-You can modify `seed-data.sql` to customize the test data.
-
-## Development Workflow
-
-### Rebuilding After Code Changes
-
-```bash
-# Rebuild and restart
-docker-compose up --build
-```
-
-### View Logs
-
-```bash
-# All services
-docker-compose logs -f
-
-# Specific service
-docker-compose logs -f app
-docker-compose logs -f postgres
-```
-
-### Access Database Directly
-
-```bash
-# Connect to PostgreSQL
-docker-compose exec postgres psql -U testuser -d agentive_inversion
-
-# Example queries
-SELECT * FROM todos;
-SELECT * FROM google_accounts;
-SELECT * FROM emails;
-```
-
-### Reset Database
-
-```bash
-# Stop containers and remove volumes
-docker-compose down -v
-
-# Start fresh (will re-run migrations)
-docker-compose up --build
-
-# Optionally load seed data
-./dev.sh db:seed
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────┐
-│         Docker Network              │
-│                                     │
-│  ┌─────────────────────────────┐   │
-│  │           App               │   │
-│  │  (Axum backend + frontend)  │   │
-│  │          :3000              │   │
-│  │                             │   │
-│  │  /api/* → API handlers      │   │
-│  │  /*     → Static frontend   │   │
-│  └─────────────┬───────────────┘   │
-│                │                    │
-│          ┌─────▼──────┐            │
-│          │            │            │
-│          │ PostgreSQL │            │
-│          │   :5432    │            │
-│          │            │            │
-│          └────────────┘            │
-│                                     │
-└─────────────────────────────────────┘
-         │
-         │ Port Mappings
-         ▼
-    Host Machine
-    localhost:3000 → App (API + Frontend)
-    localhost:5432 → Database
-```
-
-## Configuration
-
-### Environment Variables
-
-The Docker setup uses hardcoded test credentials (defined in `docker-compose.yml`):
-- Database: `testuser:testpassword`
-- Database Name: `agentive_inversion`
-
-**Note**: This is for testing only. DO NOT use these credentials in production.
-
-### Customizing Ports
-
-Edit `docker-compose.yml` to change port mappings:
-
-```yaml
-services:
-  app:
-    ports:
-      - "8080:3000"  # Change host port to 8080
-```
+`seed-data.sql` is a legacy fixture that references the removed `email_accounts`
+and `calendar_accounts` tables; it is not compatible with the current schema.
+Create todos through the UI and connect accounts through Google login instead.
 
 ## Troubleshooting
 
-### Port Already in Use
+- Missing binary during image build: build both release binaries first.
+- `exec format error`: the binary architecture or operating system does not
+  match the Linux image. Use compatible Linux build artifacts.
+- App exits on startup: inspect `docker compose logs app` for migration or
+  authentication configuration errors.
+- Port collision: change the host side of the Compose port mapping. If the
+  application origin changes, update `AUTH_REDIRECT_URI` and Google's allowed
+  callback as well.
+- Old UI after a rebuild: rebuild the frontend, then the backend, then the image.
 
-If port 3000 or 5432 is already in use:
-
-```bash
-# Find what's using the port
-lsof -i :3000
-lsof -i :5432
-
-# Kill the process or change ports in docker-compose.yml
-```
-
-### Build Failures
-
-```bash
-# Clean everything and rebuild
-docker-compose down -v
-docker system prune -a
-docker-compose up --build
-```
-
-### App Won't Start
-
-Check if migrations are failing:
-```bash
-docker-compose logs app
-```
-
-Common issues:
-- Database not ready: Wait for postgres health check
-- Migration errors: the server logs the failing migration and exits non-zero.
-  Migrations are embedded in the binary, so a fix requires a rebuild
-
-## Differences from Production
-
-This Docker setup is for **testing only**:
-
-1. **No Security**:
-   - No HTTPS
-   - Hardcoded credentials
-   - No authentication
-
-2. **No Gmail/Calendar Pollers**:
-   - Requires real OAuth credentials
-   - Not needed for UI testing
-
-3. **Development Mode**:
-   - More verbose logging
-   - No optimizations
-
-## Next Steps
-
-Once you've tested the UI:
-1. Set up real database (PostgreSQL)
-2. Configure Google OAuth credentials
-3. Run services individually for development
-4. See [QUICKSTART.md](QUICKSTART.md) for full setup
-
-## Running Individual Services
-
-You can run services independently:
-
-```bash
-# Just the database
-docker-compose up postgres
-
-# Database + App
-docker-compose up postgres app
-
-# Everything
-docker-compose up
-```
-
-## Cleaning Up
-
-```bash
-# Remove containers
-docker-compose down
-
-# Remove containers + volumes
-docker-compose down -v
-
-# Remove containers + volumes + images
-docker-compose down -v --rmi all
-```
+See [QUICKSTART.md](QUICKSTART.md) for native development and
+[DOCKER_QUICKREF.md](DOCKER_QUICKREF.md) for a compact command reference.

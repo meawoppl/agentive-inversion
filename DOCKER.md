@@ -6,8 +6,8 @@ sample data, and it starts the backend's background tasks by default.
 
 ## Build requirements
 
-The Dockerfile copies `target/release/backend` and `target/release/agent-cli`.
-Both must be **Linux binaries compatible with the image architecture**, with
+The Dockerfile copies `target/release/backend`.
+It must be **Linux binaries compatible with the image architecture**, with
 frontend assets embedded in the backend. Building native macOS binaries and
 copying them into this image will not work.
 
@@ -17,7 +17,7 @@ Rust, Trunk, the WASM target, and PostgreSQL development libraries installed:
 
 ```bash
 (cd crates/frontend && trunk build --release)
-cargo build --release --locked --bin backend --bin agent-cli
+cargo build --release --locked --bin backend
 ```
 
 Run the Docker build from a checkout containing those artifacts. Repeat both
@@ -51,17 +51,12 @@ The local database credentials are `testuser` / `testpassword`; replace them
 for deployments outside local development. Production uses PostgreSQL 17 and
 a TLS reverse proxy, separately from this Compose file.
 
-## Triage configuration
+## Connector configuration
 
-The image includes Claude Code and `agent-cli`. Log in to Claude through the UI
-to enable triage, or explicitly pass `ANTHROPIC_API_KEY` into the app container.
-The Compose file passes only the environment variables listed in its `app`
-service: adding optional triage settings to `.env` alone does not pass them
-through. Add desired settings to that service's `environment` mapping.
-
-Without a Claude credential, Gmail ingestion continues and triage stays
-disabled. There is no keyword fallback. Archive mode defaults to `propose`.
-To disable background work locally, override the app command with
+The image contains no agent runtime. Portal cron runs agents in the workspace.
+The server ingests mail and executes explicitly approved provider effects.
+Set `TRIAGE_FORWARD_TO` in the app environment to choose the receipt destination.
+To disable background work locally, override the command with
 `["/app/backend", "--dev-mode"]` in a Compose override file.
 
 ## Routine commands
@@ -86,11 +81,11 @@ The next startup recreates the schema through migrations.
 
 `seed-data.sql` is a legacy fixture that references the removed `email_accounts`
 and `calendar_accounts` tables; it is not compatible with the current schema.
-Create todos through the UI and connect accounts through Google login instead.
+Manage tasks in the Git workspace and connect accounts through Google login instead.
 
 ## Troubleshooting
 
-- Missing binary during image build: build both release binaries first.
+- Missing binary during image build: build the backend release binary first.
 - `exec format error`: the binary architecture or operating system does not
   match the Linux image. Use compatible Linux build artifacts.
 - App exits on startup: inspect `docker compose logs app` for migration or

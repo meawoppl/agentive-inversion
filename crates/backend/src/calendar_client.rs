@@ -125,6 +125,16 @@ impl CalendarClient {
         calendar_id: &str,
         event: NewCalendarEvent,
     ) -> Result<CreatedEvent> {
+        self.create_event_with_id(calendar_id, event, None).await
+    }
+
+    /// Stable provider IDs make an interrupted insert safe to reconcile/retry.
+    pub async fn create_event_with_id(
+        &self,
+        calendar_id: &str,
+        event: NewCalendarEvent,
+        event_id: Option<String>,
+    ) -> Result<CreatedEvent> {
         let description = match (&event.description, &event.email_link) {
             (Some(d), Some(link)) => Some(format!("{d}\n\nSource email: {link}")),
             (None, Some(link)) => Some(format!("Source email: {link}")),
@@ -138,6 +148,7 @@ impl CalendarClient {
         });
 
         let api_event = Event {
+            id: event_id.clone(),
             summary: Some(event.summary),
             description,
             location: event.location,
@@ -153,13 +164,27 @@ impl CalendarClient {
             ..Default::default()
         };
 
-        let (_, created) = self
+        let result = self
             .hub
             .events()
             .insert(api_event, calendar_id)
             .doit()
-            .await
-            .context("Failed to create event")?;
+            .await;
+        let created = match result {
+            Ok((_, event)) => event,
+            Err(error) => {
+                if let Some(id) = event_id {
+                    // This includes a conflict after an earlier successful insert,
+                    // and a timeout whose response was lost. Never generate a new ID.
+                    match self.hub.events().get(calendar_id, &id).doit().await {
+                        Ok((_, event)) => event,
+                        Err(_) => return Err(error).context("Calendar outcome uncertain"),
+                    }
+                } else {
+                    return Err(error).context("Failed to create event");
+                }
+            }
+        };
 
         Ok(CreatedEvent {
             google_event_id: created.id.context("Created event has no ID")?,
@@ -260,7 +285,7 @@ const MAX_EVENTS_PER_CALENDAR: usize = 2_500;
 
 /// An event already on one of the user's calendars, reduced to what
 /// duplicate detection compares.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ExistingEvent {
     pub account_email: String,
     pub calendar_id: String,

@@ -1,174 +1,83 @@
-# Architecture Overview
+# Architecture
 
-## System Components
+## Three authorities
 
-### 1. Frontend (Yew/WASM)
-**Location**: `crates/frontend`
-**Tech Stack**: Yew, WebAssembly, Trunk
-**Port**: 8080 (dev server)
+**Git owns knowledge:** projects, notes, relationships, tasks, source references,
+triage records, and copied execution receipts. Portal agents edit this repository
+directly in worktrees. CI checks identities, references, and conserved history.
+The hosted service never imports the repository or becomes a second project API.
 
-Responsibilities:
-- Decision inbox: review, approve, or reject agent-proposed todos
-- Todo list UI (create, update, delete, complete, sort, categorize)
-- Decision log, category manager, calendar views, chat widget
-- Google login flow and connected-account status
-- Pipeline health, archive review, About Me context, and Claude login
+**The connector owns provider operations:** Google refresh tokens, account sync
+cursors, cached mail, expiring work claims, immutable action requests, authorization,
+and durable execution receipts. These need transactional storage and survive agent
+sessions; PostgreSQL is retained for this purpose.
 
-Frontend module boundaries:
+**Portal owns execution and interaction:** scheduled agent runs, conversations,
+review, local plugin surfaces, and access to the workspace. Cron means Portal's
+scheduler, not a new cron process in this service or a GitHub scheduled workflow.
 
-| Module | Responsibility |
-| --- | --- |
-| `main.rs` | Module declarations and renderer entrypoint |
-| `app.rs`, `context.rs` | Authentication state, navigation shell, shared view and pending count |
-| `login.rs`, `accounts.rs`, `claude_auth.rs` | Login and connected-account components |
-| `decisions/` | Inbox, log, group/row/detail components, event preview, decision formatting |
-| `archive_review/` | Review panel and pure queue grouping/reducer logic |
-| `todos.rs`, `categories.rs`, `calendar.rs`, `chat.rs` | Individual feature views |
-| `pipeline.rs`, `about_me.rs` | Pipeline controls and personal-context editor |
-| `time.rs` | Shared local/relative timestamp formatting |
+![Architecture](docs/diagrams/project-service-architecture.svg)
 
-Feature modules use explicit imports. Decision and archive-review internals stay
-inside their modules; the app shell imports their public components. Keep shared
-state in `context.rs` and API contracts in `shared-types`, rather than creating
-cross-feature dependencies through the entrypoint.
+## Runtime
 
-### 2. Backend (Axum)
-**Location**: `crates/backend`
-**Tech Stack**: Axum, Tokio, Diesel (async), yup-oauth2
-**Port**: 3000
+`crates/backend/src/main.rs` builds an Axum router and starts two independent
+Tokio tasks: Gmail ingestion and the connector effect worker. Neither depends on
+an AI provider. The old hosted Claude runner and calendar polling stub are removed.
 
-Responsibilities:
-- REST API under `/api` (todos, emails, decisions, categories,
-  calendar events, chat, google accounts)
-- Google OAuth login with JWT cookie sessions and an email allowlist
-- Serving the built frontend as static files (SPA fallback)
-- **Email poller** (tokio background task): polls Gmail for every connected
-  account (incremental sync plus indefinite history backfill) and stores emails
-- **Triage pipeline** (tokio background task): classifies pending emails via
-  Claude Code sessions (Haiku screening, Sonnet archive determinations, Opus
-  action pass), creating decisions through the agent-cli REST path
-- **Calendar client**: live duplicate checks for event proposals and approved
-  writes to the Google “Agent” calendar
-- **Calendar poller** (tokio background task): currently a stub; it does not
-  populate the local event table used by calendar views
-- Archive proposals default to review (`TRIAGE_ARCHIVE_MODE=propose`);
-  `execute` enables automatic archiving. Receipt forwards and calendar writes
-  require approval
+`crates/backend/src/connector/` separates connection authentication, source/work
+operations, effects, SQL row models, and contract tests. New typed wire contracts
+live in `crates/shared-types/src/connector.rs`. OAuth remains in `auth/`;
+Gmail and Calendar clients remain server-side.
 
-### 3. Shared Types
-**Location**: `crates/shared-types`
-**Tech Stack**: Serde, Diesel (behind a feature flag so it also compiles to WASM)
+The Yew frontend compiles only `app`, `login`, and `connector`. It shows connected
+Google accounts and delegated connections. It authorizes/revokes connections;
+it does not review provider actions or edit projects. OAuth is a top-level browser
+flow. The Portal plugin embeds its own local workspace/review surface, rather than
+embedding Google's login flow or relying on third-party cookies.
 
-Responsibilities:
-- Domain models: todos, google accounts, emails, calendar events,
-  agent decisions, chat messages
-- API request/response types
+## Authorization
 
-## Data Flow
+Login uses the existing Google OAuth state cookie, email allowlist, and HttpOnly
+JWT session. This remains a shared personal workspace, not a multi-tenant system.
+An administrator can grant a connection only a selected set of connected accounts.
 
-```
-┌─────────────────┐
-│  Gmail Accounts │  (one row per account in google_accounts)
-└────────┬────────┘
-         │ Gmail API (OAuth2 refresh tokens)
-         v
-┌───────────────────────────────┐
-│  Backend (Axum)               │
-│  ├── email poller task        │──► emails table
-│  ├── triage pipeline (Claude  │──► agent_decisions (pending)
-│  │    Code agent sessions)    │
-│  └── REST API ◄───────────────┼──── Frontend (Yew)
-└──────────────┬────────────────┘        │
-               v                         │ approve/reject
-        ┌──────────────┐                 │ in decision inbox
-        │  PostgreSQL  │◄────────────────┘
-        └──────────────┘     approved decision → todo
-```
+A ten-minute device pairing exchanges a random secret for a 90-day, revocable
+bearer credential. Only SHA-256 credential hashes are stored. Agent credentials
+can read sources, lease work, export legacy records, and propose actions. Review
+credentials can inspect and approve/reject actions in their granted accounts, but
+cannot claim work. Website cookies cannot approve provider actions. Browser
+connection-management writes require same-origin plus a custom CSRF header.
 
-## Database Schema
+The effect worker rechecks both proposing and approving grants and the allowlist
+before it starts a provider call. Revocation cancels queued work; it cannot undo
+an already-started provider call. Agent and reviewer credentials must be kept in
+separate execution contexts; different scopes alone do not sandbox processes
+running under the same operating-system identity.
 
-Tables (see `crates/backend/src/schema.rs` for authoritative definitions):
+## Delivery and recovery
 
-- **todos** — id, title, description, completed, source (varchar), source_id,
-  due_date, link, category_id → categories, decision_id → agent_decisions
-- **google_accounts** — id, email (unique), name, refresh_token, access_token,
-  token_expires_at
-- **emails** — id, account_id → google_accounts, gmail_id, thread_id, headers,
-  subject/from/to/cc, snippet, body_text, body_html, labels, received_at,
-  processed flags. UNIQUE(account_id, gmail_id)
-- **calendar_events** — id, account_id → google_accounts, google_event_id,
-  summary, times, recurrence, attendees, processed flags.
-  UNIQUE(account_id, google_event_id)
-- **categories** — id, name (unique), color
-- **agent_decisions** — proposed actions with reasoning, confidence, and
-  status (proposed / approved / rejected / auto_approved / executed / withdrawn)
-- **chat_messages** — chat widget history
-- **about_me** — personal context supplied to action triage
-- **claude_credentials** — stored Claude login credential
+Thirty-minute claims have unique generations, renewable leases, and owner checks.
+An expired holder cannot complete or submit work after a replacement claim. Commit
+knowledge before submitting effects and completing the claim. Repeating identical
+submissions with the same idempotency key returns the original immutable proposal.
 
-## Authentication
+Approval moves a proposal into a durable queue. The worker claims it atomically,
+executes once, and records provider IDs. Interrupted or uncertain work is marked
+`unknown`; the worker never blindly repeats it. Archive retries are safe. Calendar
+writes use stable event IDs and check existing calendar entries. A known successful
+forward is recorded before archive; a retry can finish that archive without sending
+again. An uncertain send cannot be retried through the API.
 
-- Single Google OAuth flow grants login plus Gmail and Calendar scopes
-  (`gmail.modify`, `calendar`).
-- Callback verifies a CSRF state cookie, checks the `ALLOWED_EMAILS`
-  allowlist, stores the refresh token in `google_accounts`, and sets an
-  HttpOnly JWT cookie (7-day expiry, sliding refresh).
-- Connecting an additional Gmail account = logging in with it once.
-- Data is shared across the application; the allowlist is not per-user isolation.
-- Pollers authenticate to Google APIs with the stored refresh tokens via
-  yup-oauth2.
+## Migration bridge
 
-## Deployment Architecture
+Existing migrations and tables are retained. Legacy project mutations return 410;
+legacy reads remain available for historical compatibility. `/api/v1/legacy/export`
+exports About Me, categories, todos, and paginated decisions without Google tokens
+or raw email bodies. Only the connector ingestion/effects tables receive new work.
+The retired feature implementations remain in Git history; old backend read helpers
+and their tests are retained while migrating. Legacy DB records are not deleted as
+part of cutover, providing a recovery copy.
 
-### Development
-- Frontend: `trunk serve --proxy-backend http://localhost:3000/api/` (port 8080) for live
-  reload, or `trunk build` once and let the backend serve it on port 3000
-- Backend + pollers: `cargo run --bin backend` (port 3000). Pass `-- --dev-mode`
-  to skip Gmail ingestion, triage, and the calendar stub
-- Database: any PostgreSQL (local or docker-compose)
-
-### Production
-- Merge to main → `container.yml` pushes `ghcr.io/meawoppl/agentive-inversion:main`
-- Watchtower on the production host polls that tag and redeploys automatically
-  (~5 minutes from merge to live); there is no manual deploy step
-- Single backend container serves the API, pollers, and the frontend behind a
-  TLS-terminating reverse proxy. The frontend is compiled into the binary by
-  `memory-serve`, so the image carries only the binary — no `frontend/dist`,
-  no `migrations/`, no `psql`. The image also includes `agent-cli` and Claude
-  Code for triage; both Rust binaries are built for Linux before image creation
-- Database: self-hosted PostgreSQL 17 container with nightly dumps to S3
-- Migrations are embedded in the binary by `diesel_migrations` and applied by
-  the server on startup, before it binds a port. A failed migration exits
-  non-zero rather than serving a half-migrated schema, so migrations must
-  still be idempotent
-
-## Security Considerations
-
-1. **Authentication**: Google OAuth2 with CSRF state verification; JWT cookie
-   sessions; email allowlist re-checked on every request
-2. **API**: CORS restricted via `CORS_ALLOWED_ORIGINS` in production;
-   `RUST_ENV=production` enables the `Secure` cookie flag
-3. **Secrets**: Environment variables, never committed
-
-## Technology Choices
-
-### Why Rust?
-- Type safety across entire stack
-- Performance (backend and WASM frontend)
-- Excellent async support
-
-### Why Yew?
-- Native Rust for frontend
-- Component-based architecture
-- Type-safe props
-
-### Why Axum?
-- Modern async web framework
-- Type-safe routing
-- Good ecosystem integration
-
-### Why Diesel?
-- Compile-time query checking
-- Migration system
-- Async support via diesel-async
-
+Production merges build the frontend before the backend, publish the `:main` image,
+and deploy through Watchtower. Embedded migrations run before binding the HTTP port.
+The container has no Node or agent runtime. `/health` checks database connectivity.

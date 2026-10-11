@@ -13,6 +13,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod auth;
 mod calendar_client;
 mod config;
+mod connector;
 mod db;
 pub mod error;
 mod handlers;
@@ -30,7 +31,7 @@ use shared_types::HealthResponse;
 #[command(name = "backend")]
 #[command(about = "Agentive Inversion backend server")]
 struct Args {
-    /// Skip starting the Gmail and Calendar background pollers.
+    /// Skip Gmail ingestion and the external action worker.
     ///
     /// Local development normally wants the API and UI without polling live
     /// mailboxes every five minutes.
@@ -44,12 +45,6 @@ pub struct AppState {
     pub pool: db::DbPool,
     pub auth_config: Arc<AuthConfig>,
     pub triage_health: pollers::TriageHealth,
-    /// In-flight interactive Claude Code login with its start time, if any
-    /// (single-user app: one flow at a time; replacing a flow cancels the
-    /// previous one, and a reaper expires abandoned flows after a TTL so a
-    /// forgotten login can't leave a PTY child alive indefinitely)
-    pub claude_login:
-        Arc<std::sync::Mutex<Option<(claude_codes::auth::LoginFlow, std::time::Instant)>>>,
 }
 
 /// Build the full application router from shared state.
@@ -104,13 +99,6 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
         .route("/triage/decisions", post(handlers::post_triage_decision))
         .route("/pipeline/stats", get(handlers::get_pipeline_stats))
         .route("/pipeline/retriage", post(handlers::retriage_all))
-        // Claude Code login flow (subscription auth for the triage pipeline)
-        .route("/claude-auth/start", post(handlers::claude_auth_start))
-        .route(
-            "/claude-auth/complete",
-            post(handlers::claude_auth_complete),
-        )
-        .route("/claude-auth/status", get(handlers::claude_auth_status))
         .route(
             "/pipeline/archive-review",
             get(handlers::get_archive_review),
@@ -158,6 +146,7 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
         .route("/api/auth/logout", post(auth::auth_logout))
         .route("/api/auth/me", get(auth::auth_me))
         // Mount protected routes under /api
+        .nest("/api/v1", connector::routes(state.clone()))
         .nest("/api", protected_routes)
         .with_state(state)
         .merge(frontend)
@@ -169,7 +158,7 @@ pub fn build_app(state: AppState, config: &Config) -> Router {
 /// Do NOT add a separate `tracing_log::LogTracer::init()` here: `.init()`
 /// already installs the log-facade bridge (tracing-subscriber's default
 /// `tracing-log` feature), so log-crate records from dependencies such as
-/// claude-codes reach this subscriber. A second install returns
+/// Google API clients reach this subscriber. A second install returns
 /// `SetLoggerError`, which `.init()` unwraps into a panic before the server
 /// binds — that crash-looped production on 2026-08-03 (#106).
 fn init_tracing() {
@@ -217,14 +206,6 @@ async fn main() -> anyhow::Result<()> {
 
     dotenvy::dotenv().ok();
 
-    // Build provenance: which claude-codes rev this binary actually contains.
-    // Deploy gates read this line instead of grepping the binary, which can
-    // false-negative on optimized-out literals.
-    tracing::info!(
-        "Build provenance: claude-codes rev {}",
-        env!("CLAUDE_CODES_REV")
-    );
-
     let config = Config::from_env();
 
     // Migrations are embedded in the binary and applied before anything else
@@ -265,33 +246,7 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         auth_config: auth_config.clone(),
         triage_health: triage_health.clone(),
-        claude_login: Arc::new(std::sync::Mutex::new(None)),
     };
-
-    // Reap abandoned Claude login flows so a forgotten PTY child can't
-    // linger inside the container's memory budget (runs in dev mode too:
-    // the login flow exists regardless of the pollers)
-    let login_reaper_state = app_state.claude_login.clone();
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            tick.tick().await;
-            let expired = {
-                let mut slot = login_reaper_state
-                    .lock()
-                    .expect("claude_login mutex poisoned");
-                match slot.as_ref() {
-                    Some((_, started)) if started.elapsed() > handlers::LOGIN_FLOW_TTL => {
-                        slot.take()
-                    }
-                    _ => None,
-                }
-            };
-            if expired.is_some() {
-                tracing::info!("Reaped abandoned Claude login flow (TTL exceeded)");
-            }
-        }
-    });
 
     if !args.dev_mode {
         // Start email polling background task (ingestion is never gated on triage)
@@ -300,17 +255,9 @@ async fn main() -> anyhow::Result<()> {
             pollers::start_email_polling_task(email_poll_pool).await;
         });
 
-        // Start the agentic triage pipeline task
-        let triage_pool = pool.clone();
-        let triage_auth = auth_config.clone();
+        let worker_state = app_state.clone();
         tokio::spawn(async move {
-            pollers::start_triage_task(triage_pool, triage_auth, triage_health).await;
-        });
-
-        // Start calendar polling background task (stub - not yet implemented)
-        let calendar_poll_pool = pool.clone();
-        tokio::spawn(async move {
-            pollers::start_calendar_polling_task(calendar_poll_pool).await;
+            connector::run(worker_state).await;
         });
     }
 
@@ -415,7 +362,6 @@ mod tests {
                 google_client_secret: "test-client-secret".to_string(),
                 auth_redirect_uri: "http://localhost:3000/api/auth/callback".to_string(),
             }),
-            claude_login: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 

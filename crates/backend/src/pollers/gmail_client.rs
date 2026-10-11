@@ -292,6 +292,18 @@ impl GmailClient {
         from_address: &str,
         original_subject: &str,
     ) -> Result<()> {
+        self.forward_with_receipt(message_id, to_address, from_address, original_subject)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn forward_with_receipt(
+        &self,
+        message_id: &str,
+        to_address: &str,
+        from_address: &str,
+        original_subject: &str,
+    ) -> Result<String> {
         let (_, original) = self
             .hub
             .users()
@@ -335,7 +347,8 @@ impl GmailClient {
         mime.extend_from_slice(&raw);
         mime.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
-        self.hub
+        let (_, sent) = self
+            .hub
             .users()
             .messages_send(google_gmail1::api::Message::default(), "me")
             .upload(
@@ -346,7 +359,7 @@ impl GmailClient {
             .context("Failed to send forwarded message")?;
 
         tracing::info!("Forwarded message {} to {}", message_id, to_address);
-        Ok(())
+        sent.id.context("Gmail returned no sent message ID")
     }
 
     /// Archive a message (remove INBOX label)

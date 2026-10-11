@@ -3,7 +3,7 @@
 ## Architecture Overview
 
 This is a Rust workspace with 3 crates:
-1. `backend` - Axum REST API server, plus background pollers (Gmail today, Calendar stubbed) running as tokio tasks in `crates/backend/src/pollers/`
+1. `backend` - Axum REST API server, plus Gmail ingestion and approval-gated connector effects running as tokio tasks in `crates/backend/src/pollers/`
 2. `frontend` - Yew WASM application
 3. `shared-types` - Common types shared across crates
 
@@ -95,7 +95,7 @@ comment in `crates/backend/Cargo.toml`.
 
 ### Testing
 - Run tests with `cargo test --workspace`
-- No test requires a live database; CI runs no Postgres service
+- Normal tests need no DB. The ignored connector contract test requires disposable PostgreSQL; CI provides it. Never run that test against production or a development database containing useful data.
 - Router behaviour is tested in-process via `build_app()` +
   `tower::ServiceExt::oneshot` — no bound port, no network. See the tests at
   the bottom of `crates/backend/src/main.rs`
@@ -117,8 +117,7 @@ comment in `crates/backend/Cargo.toml`.
 ### API Integration
 - Gmail and Calendar APIs use OAuth2 via `yup-oauth2`
 - Client credentials stored in environment variables
-- Gmail and triage default to 5-minute intervals; the calendar stub defaults
-  to 15 minutes
+- Gmail sync runs independently; connector effects drain every five seconds.
 
 ## File Locations
 
@@ -155,7 +154,7 @@ comment in `crates/backend/Cargo.toml`.
 ```bash
 (cd crates/frontend && trunk build)  # Required before the backend compiles
 cargo run --bin backend            # Start backend server (includes pollers)
-cargo run --bin backend -- --dev-mode  # ... without ingestion, triage, or calendar polling
+cargo run --bin backend -- --dev-mode  # ... without ingestion or effect execution
 cd crates/frontend && trunk serve --proxy-backend http://localhost:3000/api/  # Live reload
 ```
 
@@ -205,82 +204,16 @@ cargo clippy --workspace --all-targets --locked # Lint code as CI does
 - Write directly to database
 - Spawned from `crates/backend/src/main.rs`
 
-### Agentic Triage Pipeline
-- Lives in `crates/backend/src/pollers/triage.rs` (orchestrator) + `services/triage.rs` (policy)
-- Three Claude Code sessions per cycle via the `claude-codes` crate: Haiku screening, Sonnet 4.5 archive determinations (proposals by default; `TRIAGE_ARCHIVE_MODE=execute` applies Gmail label `agent-archived`), Opus 4.8 action pass (reads about_me, proposes todos)
-- Agents act ONLY through the `agent-cli` binary -> REST API (`POST /api/triage/decisions`); never give agents direct DB access
-- INVARIANT: ingestion is never gated on triage; Anthropic/API failures must never touch Gmail-sync health or backoff (separate failure domains)
-- Calendar writes are gated: agents propose `create_calendar_event` decisions; approval executes to the "Agent" calendar
-- Event proposals are screened against the real calendars before they reach
-  the review inbox. `services/calendar_dedupe.rs` reads every calendar of
-  every connected account around the proposed time and drops the proposal if
-  the event is already there — including invitations the user has not
-  answered, and ones they declined. A screened proposal creates no decision;
-  the email gets `triage_status = "event_duplicate"`, which the Pipeline view
-  counts. The check **fails open**: any calendar read error lets the proposal
-  through, because an unreadable calendar cannot prove a duplicate. Disable
-  with `TRIAGE_EVENT_DEDUPE=off`
-- Matching is pure and unit-tested in `calendar_dedupe`; only `find_existing`
-  and `find_existing_bulk` touch Google. Agents are told not to guess at this
-  themselves — they cannot see the calendars
-- The submission-path check only ever sees NEW proposals. `POST
-  /api/decisions/rescan-events` applies the same rules to the queued backlog
-  (Inbox button, shown when event proposals exist). It reads each calendar
-  once over a window covering every candidate, so a 50-proposal rescan is a
-  handful of API calls, not hundreds
-- A rescan **withdraws**, never deletes: status `withdrawn`, with the matched
-  entry in `user_feedback`. Withdrawn is deliberately not `rejected` — it is
-  server policy, not a judgement the user made, so it stays out of the
-  rejected stat and can be flipped back to `proposed` if the heuristic was
-  wrong
-- Events whose start is already past (beyond a `PAST_EVENT_GRACE_HOURS`
-  window) never become proposals at all: `redirect_past_events` in
-  `services/triage.rs` rewrites the disposition to Archive, so it honours
-  `TRIAGE_ARCHIVE_MODE` like any other archive
-- Calendar reads and writes both live in `calendar_client.rs`
-  (`CalendarClient`). The `calendar_events` table is still unpopulated: the
-  calendar poller is a stub, so dedupe queries the Google API live rather
-  than the database
-- Receipt forwarding is gated: screening proposes `forward_email` decisions for receipts; approval forwards the original as an RFC 822 attachment from the account it landed in (destination is server policy: `TRIAGE_FORWARD_TO`, default receipts@ramp.com — agents never choose destinations), then labels `agent-forwarded` and archives
-- Requires the `claude` binary plus a credential (DB-stored login token preferred, `ANTHROPIC_API_KEY` env fallback); otherwise mode=disabled and emails simply stay pending — there is no other classifier (the old keyword/rule system was removed 2026-08-04)
-- Do not change TriageDecideAction / PipelineStatsResponse wire shapes casually - agent-cli and monitoring depend on them. `PipelineStatsResponse` field names are pinned by a serde test; add fields, never rename them
-- The poller records `next_cycle_at` as its sleep begins rather than letting
-  the UI derive it from `last_cycle_at + interval` — a skipped cycle (no
-  credential) or an overrunning one would make that derivation lie
-- Timestamps cross the wire as UTC and are rendered in the viewer's zone
-  (`format_local_time` / `format_local_clock`); chrono's wasmbind backend
-  reads the zone from the browser. UTC stays available in the title tooltip
+### Portal connector
 
-### Flush and Re-triage
-- `POST /api/pipeline/retriage` (Pipeline tab, behind a two-click confirm)
-  sends every live email back to `triage_status = "pending"` so all three
-  agent passes run again. The triage poller drains it over the following
-  cycles; nothing is re-fetched from Gmail
-- Emails already `archived_in_gmail` are deliberately **not** reset: they are
-  out of the inbox and settled, and re-triaging them would refill the review
-  queues with mail already dealt with. The response reports the skipped count
-  rather than hiding the narrowing
-- Pending proposals are withdrawn, not deleted, so the old queue stays in the
-  Decision Log. Executed/approved decisions are untouched
-- It is expensive (a full Claude triage run over the corpus) and idempotent
-
-### Decision Review Surfaces
-- The pending backlog runs to four figures, so neither review surface ships it
-  whole. `GET /api/decisions/pending` returns a `PendingDecisionsResponse`:
-  pending decisions collapsed into (decision_type, sender) groups, one page of
-  groups per request, each item already carrying its source email. Do not
-  reintroduce a per-decision `GET /api/emails/{id}` from the browser — that
-  N+1 was #117
-- `GET /api/decisions` returns a paginated `DecisionLogResponse`, not a bare
-  array. Both endpoints take `page` / `page_size`; the server clamps them
-- Grouping is a pure function in `crates/backend/src/services/inbox.rs` so it
-  is unit-testable without a database. Only the visible page is hydrated with
-  reasoning, proposed actions and email context — the grouping pass selects
-  narrow key columns over the whole backlog
-- Groups sort largest-first: the biggest group is the most backlog one
-  judgement can clear. A group of one renders as a bare row in the UI
-- Archive proposals stay excluded from the inbox; they have their own bundled
-  Review tab
+- Agents execute in the Git workspace via Portal cron. No hosted AI runtime.
+- Project knowledge and tasks are Git-owned. Legacy project writes return 410.
+- `connector/` implements pairing, account scopes, work leases, proposals, and receipts.
+- Every provider effect requires a paired reviewer connection; website cookies and agent grants cannot approve.
+- Never add implicit execution to a read, export, cron, or work-completion endpoint.
+- Claims are fenced by ID/generation and connection; preserve replay semantics.
+- Unknown send outcomes are never automatically retried. Preserve partial receipts.
+- See `docs/CONNECTOR_API.md` for actual contracts and `ARCHITECTURE.md` for boundaries.
 
 ## Environment Variables
 

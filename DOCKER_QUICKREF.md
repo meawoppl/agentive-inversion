@@ -1,13 +1,13 @@
 # Docker Quick Reference
 
 First complete the authentication setup and Linux artifact build in
-[DOCKER.md](DOCKER.md). The image requires both `backend` and `agent-cli` in
+[DOCKER.md](DOCKER.md). The image requires `backend` in
 `target/release`; native macOS binaries are not compatible.
 
 ```bash
 # In a compatible Linux build environment
 (cd crates/frontend && trunk build --release)
-cargo build --release --locked --bin backend --bin agent-cli
+cargo build --release --locked --bin backend
 
 # From the repository root, with .env configured
 docker compose up --build

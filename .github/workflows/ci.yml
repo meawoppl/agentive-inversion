@@ -83,6 +83,19 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: connector_test
+          POSTGRES_DB: connector_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -104,3 +117,8 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --locked
+
+      - name: Connector transaction and authorization contract
+        env:
+          TEST_DATABASE_URL: postgres://postgres:connector_test@localhost:5432/connector_test
+        run: cargo test -p backend --locked connector_database_contract -- --ignored

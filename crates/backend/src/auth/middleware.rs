@@ -23,6 +23,17 @@ pub async fn require_auth(
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    // Legacy project data is available for export, never a second writer.
+    if !matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    ) {
+        return (
+            StatusCode::GONE,
+            "Project edits now live in Git; use /api/v1 for connector actions",
+        )
+            .into_response();
+    }
     let config = &state.auth_config;
 
     // Try to get token from cookie first, then Authorization header

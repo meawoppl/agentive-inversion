@@ -77,7 +77,7 @@ pub(crate) fn login_page() -> Html {
             <div class="login-card">
                 <div class="login-header">
                     <h1>{"Agentive Inversion"}</h1>
-                    <p>{"Your AI-powered task and email assistant"}</p>
+                    <p>{"Connect Google accounts for your Portal agents"}</p>
                 </div>
 
                 {if let Some(err) = (*url_error).as_ref() {

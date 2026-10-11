@@ -43,6 +43,9 @@ pub enum ApiError {
     #[error("Invalid request: {0}")]
     BadRequest(String),
 
+    #[error("{0}")]
+    Conflict(String),
+
     /// Resource existed but is no longer available (e.g. an expired flow)
     #[error("{0}")]
     Gone(String),
@@ -127,6 +130,7 @@ impl IntoResponse for ApiError {
                 None,
             ),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone(), None),
+            ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), None),
             ApiError::Gone(msg) => (StatusCode::GONE, msg.clone(), None),
             ApiError::JsonParse(e) => {
                 tracing::warn!("JSON parse error: {:?}", e);

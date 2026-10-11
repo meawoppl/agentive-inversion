@@ -41,25 +41,10 @@ Login connects the Google account; do not insert refresh tokens manually.
 cargo run --bin backend -- --dev-mode
 ```
 
-Visit http://localhost:3000. Dev mode skips all three background tasks (Gmail,
-triage, and the calendar stub), but still requires authentication and a database.
-
-## Enable ingestion and triage
-
-Run the backend without `--dev-mode` to enable background tasks. For triage,
-install the Claude Code CLI and put the project's agent CLI on `PATH`:
-
-```bash
-cargo build --locked --bin agent-cli
-export PATH="$PWD/target/debug:$PATH"
-cargo run --bin backend
-```
-
-Use the UI's Claude login or set `ANTHROPIC_API_KEY`. Without credentials,
-emails still ingest and remain pending. Archive decisions default to review;
-see `.env.example` for execution policy, forwarding destination, and model
-settings. Calendar polling is not implemented, although event proposals can
-be checked against Google calendars and approved events can be created there.
+Visit http://localhost:3000. Dev mode skips Gmail ingestion and the provider effect
+worker, but still requires authentication and a database. Run without `--dev-mode`
+to enable these tasks. Agent execution and review live in the separate private
+workspace through Agent Portal; no AI credential is needed by this service.
 
 ## Frontend live reload
 
@@ -88,7 +73,8 @@ cargo test --workspace --locked
 cargo audit
 ```
 
-Tests do not require a running database. The frontend build must precede backend
+Normal tests do not require a running database. CI additionally runs the ignored
+connector contract test against disposable PostgreSQL (see README). The frontend build must precede backend
 compilation because `memory-serve` reads its assets at compile time.
 
 ## Troubleshooting
@@ -98,8 +84,7 @@ compilation because `memory-serve` reads its assets at compile time.
 - Login errors: check the email allowlist, OAuth client, and exact callback URI.
 - Missing `frontend/dist`: run the frontend build before compiling the backend.
 - Blank page after rebuilding assets: rebuild and restart the backend too.
-- Triage disabled: check the Claude credential and that both `claude` and
-  `agent-cli` are available to the backend process.
+- No new proposals: check the Portal schedule and the workspace agent connection.
 
 See [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
 [DOCKER.md](DOCKER.md) for more detail.

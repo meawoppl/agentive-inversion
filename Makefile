@@ -21,7 +21,7 @@ frontend:
 	cd crates/frontend && trunk build --release
 
 build: frontend
-	cargo build --release --locked --bin backend --bin agent-cli
+	cargo build --release --locked --bin backend
 
 # The image copies target/release/backend rather than compiling in Docker.
 docker-up: build

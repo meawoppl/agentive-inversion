@@ -15,7 +15,6 @@
 #   HOST                  - Bind address (default: 0.0.0.0)
 #   PORT                  - Bind port (default: 3000)
 #   RUST_LOG              - Log level (default: info)
-#   ANTHROPIC_API_KEY     - Optional triage credential (UI login is also supported)
 #   CORS_ALLOWED_ORIGINS  - Comma-separated allowed CORS origins
 
 FROM debian:trixie-slim
@@ -24,23 +23,12 @@ RUN apt-get update && \
     apt-get install -y ca-certificates libpq5 libssl3 curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Node.js + Claude Code CLI for the agentic triage pipeline. Without these
-# or a Claude credential, triage is disabled while Gmail ingestion continues.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g @anthropic-ai/claude-code && \
-    rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 # Copy pre-built backend binary (frontend assets and migrations are embedded)
 COPY ./target/release/backend /app/backend
 
-# Agent CLI used by triage agent sessions (must be on PATH)
-COPY ./target/release/agent-cli /usr/local/bin/agent-cli
-
-# Create non-root user. The triage pipeline shells out to the claude CLI, which
-# needs a writable HOME for ~/.claude.
+# Run the connector as a non-root user. Agent execution lives in Portal.
 RUN useradd -m -u 1001 -s /bin/bash appuser && \
     chown -R appuser:appuser /app
 

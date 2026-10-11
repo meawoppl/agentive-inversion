@@ -8,7 +8,7 @@
 
 mod handlers;
 pub(crate) mod jwt;
-mod middleware;
+pub(crate) mod middleware;
 pub mod types;
 
 pub use handlers::{auth_callback, auth_login, auth_logout, auth_me};

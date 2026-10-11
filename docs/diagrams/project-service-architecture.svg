@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="800" viewBox="0 0 1160 800" role="img" aria-labelledby="title desc"><title id="title">Agentive: Git knowledge, Portal work, hosted Google connector</title><desc id="desc">Portal cron runs agents directly in a Git workspace. Agents propose actions to the hosted connector, people approve through Portal, and the connector executes Google effects and returns receipts. Google OAuth stays hosted.</desc><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#7dcfff"/></marker></defs><rect width="1160" height="800" fill="#1a1b26"/><style>text{font-family:system-ui,sans-serif;fill:#c0caf5}.title{font-size:30px;font-weight:700}.sub{font-size:15px;fill:#a9b1d6}.head{font-size:22px;font-weight:650}.body{font-size:16px}.small{font-size:14px;fill:#a9b1d6}.label{font-size:13px;fill:#7dcfff}.line{fill:none;stroke:#7dcfff;stroke-width:2;marker-end:url(#arrow)}</style><text x="48" y="58" class="title">A workspace for agents. A connector for Google.</text><text x="48" y="88" class="sub">Git holds the knowledge · Portal runs the work · The hosted site keeps the credentials</text>
+<rect x="48" y="132" width="490" height="214" rx="18" fill="#24283b" stroke="#bb9af7" stroke-width="1.6"/><rect x="68" y="154" width="5" height="24" rx="2" fill="#bb9af7"/><text x="86" y="174" class="head">Agent Portal</text>
+<text x="72" y="211" class="body">Cron → bounded agent runs</text>
+<text x="72" y="237" class="body">Agents edit the repository directly</text>
+<text x="72" y="263" class="body">You review proposals and approve here</text>
+<text x="72" y="289" class="body">Local plugin: projects, tasks, approval queue</text>
+<rect x="48" y="454" width="490" height="205" rx="18" fill="#24283b" stroke="#9ece6a" stroke-width="1.6"/><rect x="68" y="476" width="5" height="24" rx="2" fill="#9ece6a"/><text x="86" y="496" class="head">Private Git workspace</text>
+<text x="72" y="533" class="body">Projects · tasks · notes · email references</text>
+<text x="72" y="559" class="body">Triage records · decisions · copied receipts</text>
+<text x="72" y="585" class="body">CI conserves IDs, links, and history</text>
+<text x="72" y="611" class="body">Worktrees and commits provide provenance</text>
+<rect x="660" y="132" width="452" height="260" rx="18" fill="#24283b" stroke="#7aa2f7" stroke-width="1.6"/><rect x="680" y="154" width="5" height="24" rx="2" fill="#7aa2f7"/><text x="698" y="174" class="head">Hosted connector</text>
+<text x="684" y="211" class="body">Google login and connection grants</text>
+<text x="684" y="237" class="body">Gmail ingestion · source and calendar reads</text>
+<text x="684" y="263" class="body">Leased work · immutable proposals</text>
+<text x="684" y="289" class="body">Approved effects · durable receipts</text>
+<text x="684" y="315" class="body">Operational PostgreSQL; no agent runtime</text>
+<rect x="660" y="506" width="452" height="153" rx="18" fill="#24283b" stroke="#e0af68" stroke-width="1.6"/><rect x="680" y="528" width="5" height="24" rx="2" fill="#e0af68"/><text x="698" y="548" class="head">Google</text>
+<text x="684" y="585" class="body">Gmail + Calendar</text>
+<text x="684" y="611" class="body">OAuth credentials stay on the hosted site</text>
+<text x="684" y="637" class="body">Archive · receipt forwarding · events</text>
+<path class="line" d="M220 348 V452"/><path class="line" d="M360 452 V348"/><text x="65" y="396" class="label">read · edit · validate · commit</text>
+<path class="line" d="M540 202 H658"/><text x="559" y="180" class="label">propose</text>
+<path class="line" d="M540 278 H658"/><text x="554" y="261" class="label">approve</text>
+<path class="line" d="M660 363 H596 V553 H540"/><text x="548" y="428" class="label">sources</text><text x="548" y="450" class="label">+ receipts</text>
+<path class="line" d="M810 394 V504"/><path class="line" d="M969 504 V394"/><text x="682" y="445" class="label">effects</text><text x="980" y="445" class="label">sync</text>
+<rect x="48" y="706" width="1064" height="48" rx="12" fill="#24283b"/><text x="73" y="736" class="small">Cron proposes. You approve in Portal. The connector executes. Git remembers.</text></svg>

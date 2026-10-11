@@ -1,3 +1,7 @@
+// Diesel QueryableByName generates explicit field initializers; Clippy 1.99
+// reports those expansion spans as redundant fields on these declarations.
+#![allow(clippy::redundant_field_names)]
+
 use chrono::{DateTime, Utc};
 use diesel::{sql_types::*, QueryableByName};
 use shared_types::connector::{ActionInfo, ConnectionInfo};

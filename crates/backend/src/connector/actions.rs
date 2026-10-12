@@ -150,7 +150,7 @@ pub async fn retry(
     p.scope("actions:approve")?;
     p.connection()?;
     let mut c = state.pool.get().await?;
-    let n=sql_query("UPDATE connector_actions SET status='queued',approved_by=$2,approved_connection_id=$3,error=NULL,updated_at=now() WHERE id=$1 AND status='unknown' AND (kind IN ('archive','create_calendar_event') OR (kind='forward_receipt' AND result_json IS NOT NULL AND (result_json::jsonb->>'forwarded')='true' AND result_json::jsonb->>'provider_id' IS NOT NULL)) AND email_id IN (SELECT id FROM emails WHERE account_id=ANY($4))").bind::<SqlUuid,_>(id).bind::<Text,_>(p.email).bind::<Nullable<SqlUuid>,_>(p.connection_id).bind::<Array<SqlUuid>,_>(&p.account_ids).execute(&mut c).await?;
+    let n=sql_query("UPDATE connector_actions SET status='queued',approved_by=$2,approved_connection_id=$3,error=NULL,updated_at=now() WHERE id=$1 AND status='unknown' AND (kind IN ('archive','report_spam','create_calendar_event') OR (kind='forward_receipt' AND result_json IS NOT NULL AND (result_json::jsonb->>'forwarded')='true' AND result_json::jsonb->>'provider_id' IS NOT NULL)) AND email_id IN (SELECT id FROM emails WHERE account_id=ANY($4))").bind::<SqlUuid,_>(id).bind::<Text,_>(p.email).bind::<Nullable<SqlUuid>,_>(p.connection_id).bind::<Array<SqlUuid>,_>(&p.account_ids).execute(&mut c).await?;
     if n == 0 {
         return Err(ApiError::Conflict("Uncertain sends cannot be retried. Only archives, stable-ID calendar writes, and archiving an already-recorded forward are retryable".into()));
     }
@@ -217,8 +217,21 @@ async fn execute(state: &AppState, row: &ActionRow) -> anyhow::Result<Receipt> {
             calendar_id: None,
             forwarded: false,
             archived: false,
+            reported_spam: false,
         });
     match request.effect {
+        Effect::ReportSpam => {
+            let gmail = GmailClient::from_account(&account).await?;
+            gmail.report_spam(&email.gmail_id).await?;
+            receipt.reported_spam = true;
+            receipt.provider_id = Some(email.gmail_id.clone());
+            let mut c = state.pool.get().await?;
+            // This legacy field tracks removal from the inbox, including Spam.
+            sql_query("UPDATE emails SET archived_in_gmail=true WHERE id=$1")
+                .bind::<SqlUuid, _>(email.id)
+                .execute(&mut c)
+                .await?;
+        }
         Effect::Archive | Effect::ForwardReceipt => {
             let gmail = GmailClient::from_account(&account).await?;
             if matches!(request.effect, Effect::ForwardReceipt) && !receipt.forwarded {

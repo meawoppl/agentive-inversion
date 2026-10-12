@@ -334,7 +334,7 @@ async fn connector_database_contract() {
     )
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    let request = json!({"email_id":email,"claim_id":cid,"reason":"Recorded in Git","repository_commit":"a".repeat(40),"repository_path":"tasks/test.json","effect":{"type":"archive"}});
+    let request = json!({"email_id":email,"claim_id":cid,"reason":"Recorded in Git","repository_commit":"a".repeat(40),"repository_path":"tasks/test.json","effect":{"type":"report_spam"}});
     let (s, action) = call(
         &app,
         "POST",
@@ -347,6 +347,8 @@ async fn connector_database_contract() {
     .await;
     assert_eq!(s, StatusCode::OK, "{action}");
     let id = action["id"].as_str().unwrap();
+    assert_eq!(action["kind"], "report_spam");
+    assert_eq!(action["status"], "proposed");
     let (s, replay) = call(
         &app,
         "POST",
@@ -421,6 +423,36 @@ async fn connector_database_contract() {
     )
     .await;
     assert_eq!(s, StatusCode::ACCEPTED);
+    // Unknown label changes are retryable only by reviewers.
+    let mut c = pool.get().await.unwrap();
+    sql_query("UPDATE connector_actions SET status='unknown' WHERE id=$1")
+        .bind::<SqlUuid, _>(Uuid::parse_str(id).unwrap())
+        .execute(&mut c)
+        .await
+        .unwrap();
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/retry"),
+        Some(&agent),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/retry"),
+        Some(&reviewer),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    drop(c);
     let completion = json!({"email_id":email,"disposition":"recorded","repository_commit":"a".repeat(40),"repository_path":"tasks/test.json"});
     for _ in 0..2 {
         let (s, r) = call(

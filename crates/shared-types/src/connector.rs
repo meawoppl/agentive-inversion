@@ -107,6 +107,7 @@ pub struct CompleteRequest {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Effect {
     Archive,
+    ReportSpam,
     ForwardReceipt,
     CreateCalendarEvent {
         summary: String,
@@ -120,6 +121,7 @@ impl Effect {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Archive => "archive",
+            Self::ReportSpam => "report_spam",
             Self::ForwardReceipt => "forward_receipt",
             Self::CreateCalendarEvent { .. } => "create_calendar_event",
         }
@@ -158,4 +160,25 @@ pub struct Receipt {
     pub calendar_id: Option<String>,
     pub forwarded: bool,
     pub archived: bool,
+    #[serde(default)]
+    pub reported_spam: bool,
+}
+
+#[cfg(test)]
+mod spam_tests {
+    use super::*;
+    #[test]
+    fn spam_roundtrip_and_old_receipts() {
+        let effect: Effect = serde_json::from_str(r#"{"type":"report_spam"}"#).unwrap();
+        assert_eq!(effect.kind(), "report_spam");
+        assert_eq!(
+            serde_json::to_string(&effect).unwrap(),
+            r#"{"type":"report_spam"}"#
+        );
+        let receipt: Receipt = serde_json::from_str(
+            r#"{"provider_id":null,"calendar_id":null,"forwarded":false,"archived":true}"#,
+        )
+        .unwrap();
+        assert!(!receipt.reported_spam);
+    }
 }

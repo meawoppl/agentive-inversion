@@ -173,3 +173,15 @@ Docs API in the same Google Cloud project if it is not already enabled. OAuth st
 on the hosted site. This grants document reads, not Drive search or document edits.
 
 Reference: https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/get
+
+### Report spam
+
+An effect `{ "type": "report_spam" }` proposes moving the source message to Gmail
+Spam, using `messages.modify` to add `SPAM` and remove `INBOX` in its owning account.
+It requires the same live claim, Git reference, and explicit reviewer approval as
+other effects. Existing `gmail.modify` authorization suffices. A successful receipt
+sets `reported_spam: true`; older receipts default this field to false. Unknown
+outcomes permit reviewer-requested retry because label changes are idempotent.
+This affects one message, not all mail from the sender, and does not unsubscribe,
+block a sender, or configure domain-wide Workspace spam policy. Do not claim a
+specific effect on Google's classifier training from this API operation.

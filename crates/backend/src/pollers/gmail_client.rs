@@ -423,6 +423,25 @@ impl GmailClient {
     /// Archive a message and tag it with the given label so agent actions
     /// stay identifiable and recoverable in Gmail
     #[allow(dead_code)] // invoked by the triage orchestrator
+    /// Move this message to Spam; does not block or unsubscribe its sender.
+    /// Label modifications are idempotent.
+    pub async fn report_spam(&self, message_id: &str) -> Result<()> {
+        self.hub
+            .users()
+            .messages_modify(
+                google_gmail1::api::ModifyMessageRequest {
+                    add_label_ids: Some(vec!["SPAM".into()]),
+                    remove_label_ids: Some(vec!["INBOX".into()]),
+                },
+                "me",
+                message_id,
+            )
+            .doit()
+            .await
+            .context("Failed to move message to Spam")?;
+        Ok(())
+    }
+
     pub async fn archive_with_label(&self, message_id: &str, label_id: &str) -> Result<()> {
         let modify_request = google_gmail1::api::ModifyMessageRequest {
             remove_label_ids: Some(vec!["INBOX".to_string()]),

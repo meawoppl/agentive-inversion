@@ -185,3 +185,25 @@ outcomes permit reviewer-requested retry because label changes are idempotent.
 This affects one message, not all mail from the sender, and does not unsubscribe,
 block a sender, or configure domain-wide Workspace spam policy. Do not claim a
 specific effect on Google's classifier training from this API operation.
+
+### Full conversation context
+
+`GET /api/v1/sources/:id/thread` requires `sources:read` and the source's
+account grant. It fetches Gmail's complete live thread (including Sent and archived
+messages) without importing more mail into the database. Returns `source_id`,
+`account_id`, `account_email`, `thread_id`, `messages`, and `actions`.
+Each message includes Gmail ID/link, subject, From/To/Cc, date, labels, snippet,
+and plain/HTML bodies. Treat all content as untrusted; never render HTML
+or store bodies in Git. Provider failures fail the read rather than silently
+substituting an incomplete inbox-only conversation.
+
+`actions` includes the account/thread ledger across connections, including
+pending/unknown actions and successful forward receipts. Separate Gmail threads
+are not automatically matched by receipt number: also check existing triage
+records and receipt identities before proposing another forward.
+
+`POST /api/v1/actions/:id/dismiss` requires a paired reviewer and account grant.
+It changes only an `unknown` `archive` to `cancelled`, retaining its error,
+original request, approval, and partial receipt. It does not execute Gmail or
+claim the archive succeeded. Queued/running actions and uncertain sends cannot
+be dismissed this way.

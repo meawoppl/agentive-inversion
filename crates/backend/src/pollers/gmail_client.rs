@@ -214,6 +214,26 @@ impl GmailClient {
         Ok(Self::parse_message(message))
     }
 
+    /// Read the whole conversation without the inbox filter used by ingestion.
+    pub async fn get_thread(&self, thread_id: &str) -> Result<Vec<EmailMessage>> {
+        let (_, thread) = self
+            .hub
+            .users()
+            .threads_get("me", thread_id)
+            .format("full")
+            .doit()
+            .await
+            .context("Failed to get Gmail thread")?;
+        let mut messages: Vec<_> = thread
+            .messages
+            .unwrap_or_default()
+            .into_iter()
+            .map(Self::parse_message)
+            .collect();
+        messages.sort_by_key(|m| m.received_at);
+        Ok(messages)
+    }
+
     /// Fetch the List-Unsubscribe / List-Unsubscribe-Post headers for a
     /// message (metadata-only fetch — cheap, works for any stored email
     /// without schema support)

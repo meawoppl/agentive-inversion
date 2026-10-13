@@ -70,10 +70,39 @@ pub struct Source {
     pub gmail_link: String,
     pub subject: String,
     pub from_address: String,
+    #[serde(default)]
+    pub to_addresses: Vec<String>,
+    #[serde(default)]
+    pub cc_addresses: Vec<String>,
     pub received_at: DateTime<Utc>,
     pub snippet: Option<String>,
     pub body_text: Option<String>,
     pub archived: bool,
+}
+/// Live Gmail conversation, including Sent/archived messages absent from ingestion.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SourceThread {
+    pub source_id: Uuid,
+    pub account_id: Uuid,
+    pub account_email: String,
+    pub thread_id: String,
+    pub messages: Vec<ThreadMessage>,
+    /// Ledger history for every stored source in this account/thread.
+    pub actions: Vec<ActionInfo>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ThreadMessage {
+    pub gmail_id: String,
+    pub gmail_link: String,
+    pub subject: String,
+    pub from_address: String,
+    pub to_addresses: Vec<String>,
+    pub cc_addresses: Vec<String>,
+    pub received_at: Option<DateTime<Utc>>,
+    pub labels: Vec<String>,
+    pub snippet: String,
+    pub body_text: Option<String>,
+    pub body_html: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourcePage {
@@ -180,5 +209,36 @@ mod spam_tests {
         )
         .unwrap();
         assert!(!receipt.reported_spam);
+    }
+}
+
+#[cfg(test)]
+mod thread_tests {
+    use super::*;
+    #[test]
+    fn thread_preserves_sent_recipients_and_archived_context() {
+        let thread = SourceThread {
+            source_id: Uuid::nil(),
+            account_id: Uuid::nil(),
+            account_email: "work@example.com".into(),
+            thread_id: "thread".into(),
+            actions: vec![],
+            messages: vec![ThreadMessage {
+                gmail_id: "sent-message".into(),
+                gmail_link: "https://mail.google.com/".into(),
+                subject: "Fwd: Receipt".into(),
+                from_address: "work@example.com".into(),
+                to_addresses: vec!["receipts@ramp.com".into()],
+                cc_addresses: vec![],
+                received_at: Some(Utc::now()),
+                labels: vec!["SENT".into()],
+                snippet: "Receipt".into(),
+                body_text: Some("Receipt #123".into()),
+                body_html: None,
+            }],
+        };
+        let decoded: SourceThread =
+            serde_json::from_str(&serde_json::to_string(&thread).unwrap()).unwrap();
+        assert_eq!(decoded, thread);
     }
 }

@@ -261,6 +261,18 @@ async fn connector_database_contract() {
     )
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
+    // Check the grant before any provider call.
+    let (s, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/sources/{hidden}/thread"),
+        Some(&agent),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
     let a = call(
         &app,
         "POST",
@@ -452,6 +464,70 @@ async fn connector_database_contract() {
     )
     .await;
     assert_eq!(s, StatusCode::ACCEPTED);
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/dismiss"),
+        Some(&reviewer),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    sql_query("UPDATE connector_actions SET status='unknown',kind='archive',error='Missing provider message' WHERE id=$1")
+        .bind::<SqlUuid,_>(Uuid::parse_str(id).unwrap()).execute(&mut c).await.unwrap();
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/dismiss"),
+        Some(&agent),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/dismiss"),
+        Some(&reviewer),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, dismissed) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/actions/{id}"),
+        Some(&reviewer),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(dismissed["status"], "cancelled");
+    assert_eq!(dismissed["error"], "Missing provider message");
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/retry"),
+        Some(&reviewer),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    // Restore fixture for subsequent worker authorization checks.
+    sql_query("UPDATE connector_actions SET status='queued',kind='report_spam' WHERE id=$1")
+        .bind::<SqlUuid, _>(Uuid::parse_str(id).unwrap())
+        .execute(&mut c)
+        .await
+        .unwrap();
     drop(c);
     let completion = json!({"email_id":email,"disposition":"recorded","repository_commit":"a".repeat(40),"repository_path":"tasks/test.json"});
     for _ in 0..2 {

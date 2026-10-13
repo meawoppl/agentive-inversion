@@ -142,6 +142,25 @@ pub async fn reject(
     }
     Ok(StatusCode::NO_CONTENT)
 }
+/// Stop reviewing a failed archive without claiming Gmail succeeded or erasing evidence.
+pub async fn dismiss(
+    State(state): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    p.scope("actions:approve")?;
+    p.connection()?;
+    let mut c = state.pool.get().await?;
+    let n = sql_query("UPDATE connector_actions SET status='cancelled',updated_at=now() WHERE id=$1 AND status='unknown' AND kind='archive' AND email_id IN (SELECT id FROM emails WHERE account_id=ANY($2))")
+        .bind::<SqlUuid,_>(id).bind::<Array<SqlUuid>,_>(&p.account_ids).execute(&mut c).await?;
+    if n == 0 {
+        return Err(ApiError::Conflict(
+            "Only uncertain archive actions can be dismissed".into(),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn retry(
     State(state): State<AppState>,
     Extension(p): Extension<Principal>,

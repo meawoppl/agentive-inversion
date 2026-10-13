@@ -32,6 +32,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/documents/:id", get(documents::get))
         .route("/sources", get(work::sources))
         .route("/sources/:id", get(work::get_source))
+        .route("/sources/:id/thread", get(work::get_thread))
         .route("/work/claims", post(work::claim))
         .route("/work/claims/:id/renew", post(work::renew))
         .route("/work/claims/:id/release", post(work::release))
@@ -41,6 +42,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/actions/:id/approve", post(actions::approve))
         .route("/actions/:id/reject", post(actions::reject))
         .route("/actions/:id/retry", post(actions::retry))
+        .route("/actions/:id/dismiss", post(actions::dismiss))
         .route("/legacy/export", get(export))
         .layer(middleware::from_fn_with_state(state, auth::require));
     Router::new()

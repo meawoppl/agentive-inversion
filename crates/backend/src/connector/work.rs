@@ -1,7 +1,11 @@
-use super::{auth::Principal, models::IdRow};
+use super::{
+    auth::Principal,
+    models::{ActionRow, IdRow},
+};
 use crate::{
     db,
     error::{ApiError, ApiResult},
+    pollers::gmail_client::GmailClient,
     AppState,
 };
 use axum::{
@@ -34,6 +38,13 @@ pub fn source(e: db::emails::Email, account_email: String, body: bool) -> Source
         gmail_link,
         subject: e.subject,
         from_address: e.from_address,
+        to_addresses: e.to_addresses.into_iter().flatten().collect(),
+        cc_addresses: e
+            .cc_addresses
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .collect(),
         received_at: e.received_at,
         snippet: e.snippet,
         body_text: if body { e.body_text } else { None },
@@ -104,6 +115,56 @@ pub async fn get_source(
     let account = db::google_accounts::get_by_id(&mut c, e.account_id).await?;
     Ok(Json(source(e, account.email, q.body.unwrap_or(false))))
 }
+pub async fn get_thread(
+    State(state): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<SourceThread>> {
+    p.scope("sources:read")?;
+    let mut c = state.pool.get().await?;
+    let source = db::emails::get_by_id(&mut c, id).await?;
+    p.account(source.account_id)?;
+    let account = db::google_accounts::get_by_id(&mut c, source.account_id).await?;
+    let rows = diesel::sql_query("SELECT a.* FROM connector_actions a JOIN emails e ON e.id=a.email_id WHERE e.account_id=$1 AND e.thread_id=$2 ORDER BY a.created_at,a.id")
+        .bind::<SqlUuid,_>(source.account_id).bind::<Text,_>(&source.thread_id)
+        .load::<ActionRow>(&mut c).await?;
+    drop(c);
+    let gmail = GmailClient::from_account(&account).await?;
+    let messages = gmail
+        .get_thread(&source.thread_id)
+        .await?
+        .into_iter()
+        .map(|m| ThreadMessage {
+            gmail_link: format!(
+                "https://mail.google.com/mail/u/{}/#all/{}",
+                urlencoding::encode(&account.email),
+                m.id
+            ),
+            gmail_id: m.id,
+            subject: m.subject,
+            from_address: m.from,
+            to_addresses: m.to,
+            cc_addresses: m.cc,
+            received_at: m.received_at,
+            labels: m.labels,
+            snippet: m.snippet,
+            body_text: m.body_text,
+            body_html: m.body_html,
+        })
+        .collect();
+    Ok(Json(SourceThread {
+        source_id: id,
+        account_id: source.account_id,
+        account_email: account.email,
+        thread_id: source.thread_id,
+        messages,
+        actions: rows
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_, _>>()?,
+    }))
+}
+
 pub fn validate_reference(commit: &str, path: &str) -> ApiResult<()> {
     if !matches!(commit.len(), 40 | 64) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(ApiError::bad_request(

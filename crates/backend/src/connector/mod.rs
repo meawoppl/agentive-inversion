@@ -42,6 +42,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/actions/:id", get(actions::get))
         .route("/actions/:id/approve", post(actions::approve))
         .route("/actions/:id/reject", post(actions::reject))
+        .route("/actions/:id/revise", post(actions::revise))
         .route("/actions/:id/retry", post(actions::retry))
         .route("/actions/:id/dismiss", post(actions::dismiss))
         .route("/legacy/export", get(export))

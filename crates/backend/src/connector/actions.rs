@@ -184,11 +184,11 @@ pub async fn dismiss(
     p.scope("actions:approve")?;
     p.connection()?;
     let mut c = state.pool.get().await?;
-    let n = sql_query("UPDATE connector_actions SET status='cancelled',updated_at=now() WHERE id=$1 AND status='unknown' AND kind='archive' AND email_id IN (SELECT id FROM emails WHERE account_id=ANY($2))")
+    let n = sql_query("UPDATE connector_actions SET status='cancelled',updated_at=now() WHERE id=$1 AND status='unknown' AND kind IN ('archive','report_spam','create_calendar_event') AND email_id IN (SELECT id FROM emails WHERE account_id=ANY($2))")
         .bind::<SqlUuid,_>(id).bind::<Array<SqlUuid>,_>(&p.account_ids).execute(&mut c).await?;
     if n == 0 {
         return Err(ApiError::Conflict(
-            "Only uncertain archive actions can be dismissed".into(),
+            "Only uncertain archive, spam, or calendar actions can be dismissed".into(),
         ));
     }
     Ok(StatusCode::NO_CONTENT)

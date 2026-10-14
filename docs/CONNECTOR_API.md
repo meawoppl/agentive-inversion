@@ -230,3 +230,5 @@ The response is a new proposed action, never an approval or execution.
 The original remains rejected and the new reason records its predecessor ID.
 Normal effect validation, destination sealing, idempotency, and duplicate-effect
 constraints still apply. Read current threads and the ledger before revising.
+
+Reviewer-only `POST /actions/{id}/dismiss` cancels an `unknown` archive, spam, or calendar action after inspection. It retains the error and any partial receipt, does not assert provider success, and does not undo effects. Pending/running/completed actions and uncertain forwards cannot be dismissed this way.

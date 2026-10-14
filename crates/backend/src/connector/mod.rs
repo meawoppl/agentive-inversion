@@ -30,6 +30,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/connections/:id/revoke", post(auth::revoke))
         .route("/calendar/events", get(calendar_events))
         .route("/documents/:id", get(documents::get))
+        .route("/mail/search", get(work::search_mail))
         .route("/sources", get(work::sources))
         .route("/sources/:id", get(work::get_source))
         .route("/sources/:id/thread", get(work::get_thread))

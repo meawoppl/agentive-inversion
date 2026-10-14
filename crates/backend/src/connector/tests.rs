@@ -273,6 +273,19 @@ async fn connector_database_contract() {
     )
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
+    for (path, expected) in [
+        (
+            format!("/api/v1/mail/search?account_id={other}&q=kruze"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            format!("/api/v1/mail/search?account_id={account}&q="),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, _) = call(&app, "GET", &path, Some(&agent), None, json!(null), None).await;
+        assert_eq!(status, expected);
+    }
     let a = call(
         &app,
         "POST",

@@ -234,6 +234,34 @@ impl GmailClient {
         Ok(messages)
     }
 
+    /// Search all mail, including archived conversations. No provider writes.
+    pub async fn search_threads(
+        &self,
+        query: &str,
+        page: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<String>, Option<String>)> {
+        let mut call = self
+            .hub
+            .users()
+            .threads_list("me")
+            .q(query)
+            .max_results(limit);
+        if let Some(page) = page {
+            call = call.page_token(page);
+        }
+        let (_, result) = call.doit().await.context("Gmail search failed")?;
+        Ok((
+            result
+                .threads
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|t| t.id)
+                .collect(),
+            result.next_page_token,
+        ))
+    }
+
     /// Fetch the List-Unsubscribe / List-Unsubscribe-Post headers for a
     /// message (metadata-only fetch — cheap, works for any stored email
     /// without schema support)

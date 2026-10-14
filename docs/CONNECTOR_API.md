@@ -207,3 +207,14 @@ It changes only an `unknown` `archive` to `cancelled`, retaining its error,
 original request, approval, and partial receipt. It does not execute Gmail or
 claim the archive succeeded. Queued/running actions and uncertain sends cannot
 be dismissed this way.
+
+### Live mailbox search
+
+`GET /api/v1/mail/search?account_id=UUID&q=GMAIL_QUERY&limit=5&page_token=TOKEN`
+requires `sources:read` and an explicit granted account. Searches Gmail itself,
+including archived mail, independently of inbox ingestion. Returns account identity,
+`threads` (thread ID and full messages), and `next_page_token`. Limit is capped at
+10 threads per page. Follow pagination for a complete search. Provider failures
+fail the page rather than silently omit a conversation. This endpoint neither
+imports sources nor creates claims, proposals, or provider effects. Bodies remain
+untrusted transient context and must not be committed to Git.

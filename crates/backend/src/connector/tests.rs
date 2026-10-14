@@ -535,6 +535,32 @@ async fn connector_database_contract() {
     )
     .await;
     assert_eq!(s, StatusCode::CONFLICT);
+    for kind in ["report_spam", "create_calendar_event", "forward_receipt"] {
+        sql_query("UPDATE connector_actions SET status='unknown',kind=$2 WHERE id=$1")
+            .bind::<SqlUuid, _>(Uuid::parse_str(id).unwrap())
+            .bind::<Text, _>(kind)
+            .execute(&mut c)
+            .await
+            .unwrap();
+        let (status, _) = call(
+            &app,
+            "POST",
+            &format!("/api/v1/actions/{id}/dismiss"),
+            Some(&reviewer),
+            None,
+            json!(null),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            if kind == "forward_receipt" {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::NO_CONTENT
+            }
+        );
+    }
     // Restore fixture for subsequent worker authorization checks.
     sql_query("UPDATE connector_actions SET status='queued',kind='report_spam' WHERE id=$1")
         .bind::<SqlUuid, _>(Uuid::parse_str(id).unwrap())

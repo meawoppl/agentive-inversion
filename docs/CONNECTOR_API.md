@@ -232,3 +232,5 @@ Normal effect validation, destination sealing, idempotency, and duplicate-effect
 constraints still apply. Read current threads and the ledger before revising.
 
 Reviewer-only `POST /actions/{id}/dismiss` cancels an `unknown` archive, spam, or calendar action after inspection. It retains the error and any partial receipt, does not assert provider success, and does not undo effects. Pending/running/completed actions and uncertain forwards cannot be dismissed this way.
+
+Calendar reads skip Google public holiday feeds only when they return 404, logging the unavailable feed. Personal/shared calendar errors and permission failures still fail the read so duplicate detection does not silently ignore appointments.

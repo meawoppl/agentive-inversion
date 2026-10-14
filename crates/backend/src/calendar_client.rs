@@ -245,9 +245,17 @@ impl CalendarClient {
                 call = call.page_token(token);
             }
 
-            let (_, list) = call
-                .doit()
-                .await
+            let result = call.doit().await;
+            if let Err(error) = &result {
+                if unavailable_holiday_calendar(calendar_id, error) {
+                    tracing::warn!(
+                        calendar_id,
+                        "Skipping unavailable public holiday calendar (404)"
+                    );
+                    return Ok(events);
+                }
+            }
+            let (_, list) = result
                 .with_context(|| format!("Failed to list events on calendar {calendar_id}"))?;
 
             events.extend(
@@ -335,5 +343,40 @@ impl ExistingEvent {
                 .and_then(|a| a.response_status),
             html_link: event.html_link,
         })
+    }
+}
+
+// Public Google holiday feeds cannot contain a user's appointments. A stale
+// subscription must not block deduplication against their actual calendars.
+// Do not hide errors on personal/shared calendars or authorization failures.
+fn unavailable_holiday_calendar(calendar_id: &str, error: &google_calendar3::Error) -> bool {
+    if !calendar_id.ends_with("#holiday@group.v.calendar.google.com") {
+        return false;
+    }
+    match error {
+        google_calendar3::Error::BadRequest(body) => {
+            body.pointer("/error/code").and_then(|code| code.as_u64()) == Some(404)
+        }
+        google_calendar3::Error::Failure(response) => response.status().as_u16() == 404,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod unavailable_calendar_tests {
+    use super::*;
+    #[test]
+    fn only_missing_public_holiday_feeds_are_skipped() {
+        let missing =
+            google_calendar3::Error::BadRequest(serde_json::json!({"error":{"code":404}}));
+        let denied = google_calendar3::Error::BadRequest(serde_json::json!({"error":{"code":403}}));
+        let holiday = "en.usa#holiday@group.v.calendar.google.com";
+        assert!(unavailable_holiday_calendar(holiday, &missing));
+        assert!(!unavailable_holiday_calendar("primary", &missing));
+        assert!(!unavailable_holiday_calendar(
+            "shared@group.calendar.google.com",
+            &missing
+        ));
+        assert!(!unavailable_holiday_calendar(holiday, &denied));
     }
 }

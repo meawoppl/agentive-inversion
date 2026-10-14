@@ -218,3 +218,15 @@ including archived mail, independently of inbox ingestion. Returns account ident
 fail the page rather than silently omit a conversation. This endpoint neither
 imports sources nor creates claims, proposals, or provider effects. Bodies remain
 untrusted transient context and must not be committed to Git.
+
+### Revise a rejected proposal
+
+`POST /api/v1/actions/{id}/revise` requires `actions:propose` and an
+`Idempotency-Key`. Supply the normal action request with the original `email_id`
+and `claim_id`, plus the revised effect, reason, and committed repository reference.
+Only a rejected proposal owned by the calling connection in its account scope
+is eligible; the completed claim is retained as provenance, not renewed.
+The response is a new proposed action, never an approval or execution.
+The original remains rejected and the new reason records its predecessor ID.
+Normal effect validation, destination sealing, idempotency, and duplicate-effect
+constraints still apply. Read current threads and the ledger before revising.

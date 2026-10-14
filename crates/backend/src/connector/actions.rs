@@ -32,6 +32,24 @@ pub async fn submit(
     headers: HeaderMap,
     Json(input): Json<ActionRequest>,
 ) -> ApiResult<Json<ActionInfo>> {
+    submit_inner(state, p, headers, input, None).await
+}
+pub async fn revise(
+    State(state): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<ActionRequest>,
+) -> ApiResult<Json<ActionInfo>> {
+    submit_inner(state, p, headers, input, Some(id)).await
+}
+async fn submit_inner(
+    state: AppState,
+    p: Principal,
+    headers: HeaderMap,
+    mut input: ActionRequest,
+    revision_of: Option<Uuid>,
+) -> ApiResult<Json<ActionInfo>> {
     p.scope("actions:propose")?;
     let cid = p.connection()?;
     validate_reference(&input.repository_commit, &input.repository_path)?;
@@ -57,6 +75,9 @@ pub async fn submit(
         .filter(|s| !s.is_empty() && s.len() <= 200)
         .ok_or_else(|| ApiError::bad_request("Idempotency-Key header required (1–200 bytes)"))?
         .to_string();
+    if let Some(id) = revision_of {
+        input.reason = format!("Revision of {id}: {}", input.reason);
+    }
     let json = serde_json::to_string(&input)?;
     let mut c = state.pool.get().await?;
     let row=c.transaction::<ActionRow,ApiError,_>(async move |c| {
@@ -69,9 +90,21 @@ pub async fn submit(
   if matches!(&input.effect, Effect::CreateCalendarEvent { start, .. } if *start <= Utc::now()) {
       return Err(ApiError::bad_request("Event start must be in the future"));
   }
+  if let Some(previous_id) = revision_of {
+      let previous = sql_query("SELECT a.* FROM connector_actions a JOIN emails e ON e.id=a.email_id WHERE a.id=$1 AND a.connection_id=$2 AND a.status='rejected' AND a.email_id=$3 AND e.account_id=ANY($4) FOR UPDATE OF a")
+          .bind::<SqlUuid,_>(previous_id).bind::<SqlUuid,_>(cid)
+          .bind::<SqlUuid,_>(input.email_id).bind::<Array<SqlUuid>,_>(&p.account_ids)
+          .get_result::<ActionRow>(&mut *c).await.optional()?;
+      let previous = previous.ok_or_else(||ApiError::Conflict("Only this connection's rejected proposals can be revised".into()))?;
+      let original: ActionRequest = serde_json::from_str(&previous.request_json)?;
+      if original.claim_id != input.claim_id {
+          return Err(ApiError::Conflict("Revision must preserve the original source and claim reference".into()));
+      }
+  } else {
   let valid=sql_query("SELECT e.id FROM connector_claims w JOIN emails e ON e.id=w.email_id WHERE w.email_id=$1 AND w.claim_id=$2 AND w.connection_id=$3 AND w.expires_at>now() AND w.completed_at IS NULL AND e.account_id=ANY($4) FOR UPDATE OF w")
    .bind::<SqlUuid,_>(input.email_id).bind::<SqlUuid,_>(input.claim_id).bind::<SqlUuid,_>(cid).bind::<Array<SqlUuid>,_>(&p.account_ids).get_result::<IdRow>(&mut *c).await.optional()?;
   if valid.is_none(){return Err(ApiError::Conflict("Current, incomplete work claim required".into()));}
+  }
   let destination=if matches!(input.effect,Effect::ForwardReceipt){let v=crate::services::triage::forward_to_address();if v.contains(['\r','\n'])||!v.contains('@'){return Err(ApiError::Config("Invalid receipt destination".into()));}Some(v)}else{None};
   let inserted=sql_query("INSERT INTO connector_actions(id,connection_id,email_id,idempotency_key,request_json,kind,status,forward_to) VALUES($1,$2,$3,$4,$5,$6,'proposed',$7) ON CONFLICT DO NOTHING RETURNING *")
    .bind::<SqlUuid,_>(Uuid::new_v4()).bind::<SqlUuid,_>(cid).bind::<SqlUuid,_>(input.email_id).bind::<Text,_>(key).bind::<Text,_>(json).bind::<Text,_>(input.effect.kind()).bind::<Nullable<Text>,_>(destination).get_result::<ActionRow>(&mut *c).await.optional()?;

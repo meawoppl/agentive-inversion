@@ -562,11 +562,117 @@ async fn connector_database_contract() {
         "/api/v1/actions",
         Some(&agent),
         None,
-        request,
+        request.clone(),
         Some("different-key"),
     )
     .await;
     assert_eq!(s, StatusCode::CONFLICT);
+    // A completed work claim can only be reused to revise a rejected proposal.
+    let revision_path = format!("/api/v1/actions/{id}/revise");
+    let (s, _) = call(
+        &app,
+        "POST",
+        &revision_path,
+        Some(&agent),
+        None,
+        request.clone(),
+        Some("revision-key"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let mut c = pool.get().await.unwrap();
+    sql_query("UPDATE connector_actions SET status='proposed' WHERE id=$1")
+        .bind::<SqlUuid, _>(Uuid::parse_str(id).unwrap())
+        .execute(&mut c)
+        .await
+        .unwrap();
+    drop(c);
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/reject"),
+        Some(&reviewer),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let mut wrong_source = request.clone();
+    wrong_source["email_id"] = json!(Uuid::new_v4());
+    let (s, _) = call(
+        &app,
+        "POST",
+        &revision_path,
+        Some(&agent),
+        None,
+        wrong_source,
+        Some("wrong-source"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let (s, revised) = call(
+        &app,
+        "POST",
+        &revision_path,
+        Some(&agent),
+        None,
+        request.clone(),
+        Some("revision-key"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{revised}");
+    assert_ne!(revised["id"], action["id"]);
+    assert_eq!(revised["status"], "proposed");
+    assert!(revised["approved_by"].is_null());
+    assert!(revised["request"]["reason"].as_str().unwrap().contains(id));
+    let (s, replay) = call(
+        &app,
+        "POST",
+        &revision_path,
+        Some(&agent),
+        None,
+        request.clone(),
+        Some("revision-key"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(replay["id"], revised["id"]);
+    let (s, _) = call(
+        &app,
+        "POST",
+        &revision_path,
+        Some(&agent),
+        None,
+        request.clone(),
+        Some("duplicate-revision"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let (_, previous) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/actions/{id}"),
+        Some(&agent),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(previous["status"], "rejected");
+    // Reset disposable test fixtures for the worker authorization checks.
+    let mut c = pool.get().await.unwrap();
+    sql_query("DELETE FROM connector_actions WHERE id=$1")
+        .bind::<SqlUuid, _>(Uuid::parse_str(revised["id"].as_str().unwrap()).unwrap())
+        .execute(&mut c)
+        .await
+        .unwrap();
+    sql_query("UPDATE connector_actions SET status='queued' WHERE id=$1")
+        .bind::<SqlUuid, _>(Uuid::parse_str(id).unwrap())
+        .execute(&mut c)
+        .await
+        .unwrap();
+    drop(c);
     let (s, _) = call(
         &app,
         "POST",

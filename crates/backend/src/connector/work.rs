@@ -5,7 +5,7 @@ use super::{
 use crate::{
     db,
     error::{ApiError, ApiResult},
-    pollers::gmail_client::GmailClient,
+    pollers::gmail_client::{EmailMessage, GmailClient},
     AppState,
 };
 use axum::{
@@ -134,23 +134,7 @@ pub async fn get_thread(
         .get_thread(&source.thread_id)
         .await?
         .into_iter()
-        .map(|m| ThreadMessage {
-            gmail_link: format!(
-                "https://mail.google.com/mail/u/{}/#all/{}",
-                urlencoding::encode(&account.email),
-                m.id
-            ),
-            gmail_id: m.id,
-            subject: m.subject,
-            from_address: m.from,
-            to_addresses: m.to,
-            cc_addresses: m.cc,
-            received_at: m.received_at,
-            labels: m.labels,
-            snippet: m.snippet,
-            body_text: m.body_text,
-            body_html: m.body_html,
-        })
+        .map(|m| thread_message(m, &account.email))
         .collect();
     Ok(Json(SourceThread {
         source_id: id,
@@ -162,6 +146,79 @@ pub async fn get_thread(
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<_, _>>()?,
+    }))
+}
+
+fn thread_message(m: EmailMessage, account_email: &str) -> ThreadMessage {
+    ThreadMessage {
+        gmail_link: format!(
+            "https://mail.google.com/mail/u/{}/#all/{}",
+            urlencoding::encode(account_email),
+            m.id
+        ),
+        gmail_id: m.id,
+        subject: m.subject,
+        from_address: m.from,
+        to_addresses: m.to,
+        cc_addresses: m.cc,
+        received_at: m.received_at,
+        labels: m.labels,
+        snippet: m.snippet,
+        body_text: m.body_text,
+        body_html: m.body_html,
+    }
+}
+#[derive(Deserialize)]
+pub struct MailSearchQuery {
+    pub account_id: Uuid,
+    pub q: String,
+    pub page_token: Option<String>,
+    pub limit: Option<u32>,
+}
+pub async fn search_mail(
+    State(state): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<MailSearchQuery>,
+) -> ApiResult<Json<MailSearchPage>> {
+    p.scope("sources:read")?;
+    p.account(q.account_id)?;
+    if q.q.trim().is_empty()
+        || q.q.len() > 2000
+        || q.page_token.as_ref().is_some_and(|t| t.len() > 2048)
+    {
+        return Err(ApiError::bad_request(
+            "A search query of 1–2000 bytes and a bounded page token are required",
+        ));
+    }
+    let mut c = state.pool.get().await?;
+    let account = db::google_accounts::get_by_id(&mut c, q.account_id).await?;
+    drop(c);
+    let gmail = GmailClient::from_account(&account).await?;
+    let (ids, next_page_token) = gmail
+        .search_threads(
+            &q.q,
+            q.page_token.as_deref(),
+            q.limit.unwrap_or(5).clamp(1, 10),
+        )
+        .await?;
+    let mut threads = Vec::new();
+    for thread_id in ids {
+        let messages = gmail
+            .get_thread(&thread_id)
+            .await?
+            .into_iter()
+            .map(|m| thread_message(m, &account.email))
+            .collect();
+        threads.push(MailThread {
+            thread_id,
+            messages,
+        });
+    }
+    Ok(Json(MailSearchPage {
+        account_id: account.id,
+        account_email: account.email,
+        threads,
+        next_page_token,
     }))
 }
 

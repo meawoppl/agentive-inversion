@@ -104,6 +104,19 @@ pub struct ThreadMessage {
     pub body_text: Option<String>,
     pub body_html: Option<String>,
 }
+/// Read-only live mailbox search, independent of inbox ingestion.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MailSearchPage {
+    pub account_id: Uuid,
+    pub account_email: String,
+    pub threads: Vec<MailThread>,
+    pub next_page_token: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MailThread {
+    pub thread_id: String,
+    pub messages: Vec<ThreadMessage>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourcePage {
     pub items: Vec<Source>,
@@ -240,5 +253,17 @@ mod thread_tests {
         let decoded: SourceThread =
             serde_json::from_str(&serde_json::to_string(&thread).unwrap()).unwrap();
         assert_eq!(decoded, thread);
+        let page = MailSearchPage {
+            account_id: thread.account_id,
+            account_email: thread.account_email,
+            threads: vec![MailThread {
+                thread_id: thread.thread_id,
+                messages: thread.messages,
+            }],
+            next_page_token: Some("next".into()),
+        };
+        let restored: MailSearchPage =
+            serde_json::from_str(&serde_json::to_string(&page).unwrap()).unwrap();
+        assert_eq!(restored, page);
     }
 }

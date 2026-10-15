@@ -62,6 +62,7 @@ async fn connector_database_contract() {
     let admin = crate::auth::jwt::create_token(&cfg, "owner@example.com", None).unwrap();
     let state = crate::AppState {
         pool: pool.clone(),
+        review_events: Default::default(),
         auth_config: Arc::new(cfg),
         triage_health: Arc::new(tokio::sync::RwLock::new(Default::default())),
     };
@@ -827,4 +828,65 @@ async fn connector_database_contract() {
     )
     .await;
     assert_eq!(s, StatusCode::GONE);
+    // Exercise the actual upgrade, push, and live credential revocation boundary.
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    let (socket_token, socket_id) = pair(&app, &admin, account, false).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let live_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, live_app).await.unwrap();
+    });
+    let mut request = format!("ws://{address}/api/v1/events")
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {socket_token}").parse().unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    async fn next_text(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while let Some(message) = socket.next().await {
+                if let Message::Text(text) = message.unwrap() {
+                    return text;
+                }
+            }
+            panic!("socket closed before invalidation");
+        })
+        .await
+        .unwrap()
+    }
+    assert_eq!(next_text(&mut socket).await, "{\"type\":\"invalidate\"}");
+    state
+        .review_events
+        .publish(vec![account], Some(Uuid::parse_str(&socket_id).unwrap()));
+    assert_eq!(next_text(&mut socket).await, "{\"type\":\"invalidate\"}");
+    let mut c = pool.get().await.unwrap();
+    sql_query("UPDATE connector_connections SET revoked_at=now() WHERE id=$1")
+        .bind::<SqlUuid, _>(Uuid::parse_str(&socket_id).unwrap())
+        .execute(&mut c)
+        .await
+        .unwrap();
+    drop(c);
+    state
+        .review_events
+        .publish(vec![account], Some(Uuid::parse_str(&socket_id).unwrap()));
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while let Some(message) = socket.next().await {
+            match message.unwrap() {
+                Message::Close(_) => break,
+                Message::Text(_) => panic!("revoked socket received a hint"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    server.abort();
 }

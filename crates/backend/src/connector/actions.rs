@@ -210,19 +210,39 @@ pub async fn retry(
 }
 
 pub async fn run(state: AppState) {
+    let mut wake = state.review_events.subscribe();
     loop {
-        if let Err(e) = tick(&state).await {
-            tracing::error!("Connector action worker: {e:#}");
+        match tick(&state).await {
+            Ok(true) => continue, // Drain approved work without an artificial per-item delay.
+            Ok(false) => {}
+            Err(e) => tracing::error!("Connector action worker: {e:#}"),
         }
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::select! {
+            _ = wake.recv() => {},
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {},
+        }
     }
 }
-pub(super) async fn tick(state: &AppState) -> anyhow::Result<()> {
+pub(super) async fn tick(state: &AppState) -> anyhow::Result<bool> {
     let mut c = state.pool.get().await?;
-    sql_query("UPDATE connector_actions a SET status='cancelled',error='Proposing connection expired or revoked',updated_at=now() WHERE status IN ('proposed','queued') AND NOT EXISTS (SELECT 1 FROM connector_connections c WHERE c.id=a.connection_id AND c.revoked_at IS NULL AND c.expires_at>now())").execute(&mut c).await?;
-    sql_query("UPDATE connector_actions SET status='unknown',error='Worker interrupted; inspect provider before any retry',updated_at=now() WHERE status='running' AND updated_at<now()-interval '10 minutes'").execute(&mut c).await?;
+    let changed = sql_query("UPDATE connector_actions a SET status='cancelled',error='Proposing connection expired or revoked',updated_at=now() WHERE status IN ('proposed','queued') AND NOT EXISTS (SELECT 1 FROM connector_connections c WHERE c.id=a.connection_id AND c.revoked_at IS NULL AND c.expires_at>now()) RETURNING email_id AS id").load::<IdRow>(&mut c).await?;
+    for changed in changed {
+        let email = db::emails::get_by_id(&mut c, changed.id).await?;
+        state.review_events.publish(vec![email.account_id], None);
+    }
+    let changed = sql_query("UPDATE connector_actions SET status='unknown',error='Worker interrupted; inspect provider before any retry',updated_at=now() WHERE status='running' AND updated_at<now()-interval '10 minutes' RETURNING email_id AS id").load::<IdRow>(&mut c).await?;
+    for changed in changed {
+        let email = db::emails::get_by_id(&mut c, changed.id).await?;
+        state.review_events.publish(vec![email.account_id], None);
+    }
     let row=sql_query("UPDATE connector_actions SET status='running',updated_at=now() WHERE id=(SELECT id FROM connector_actions WHERE status='queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *").get_result::<ActionRow>(&mut c).await.optional()?;
-    let Some(row) = row else { return Ok(()) };
+    let Some(row) = row else { return Ok(false) };
+    let account_id = db::emails::get_by_id(&mut c, row.email_id)
+        .await?
+        .account_id;
+    state
+        .review_events
+        .publish(vec![account_id], Some(row.connection_id));
     let grant=sql_query("SELECT * FROM connector_connections WHERE id=$1 AND revoked_at IS NULL AND expires_at>now()").bind::<SqlUuid,_>(row.connection_id).get_result::<ConnectionRow>(&mut c).await.optional()?;
     let approval_live=sql_query("SELECT a.id FROM connector_actions a LEFT JOIN connector_connections c ON c.id=a.approved_connection_id WHERE a.id=$1 AND c.revoked_at IS NULL AND c.expires_at>now() AND 'actions:approve'=ANY(c.scopes)").bind::<SqlUuid,_>(row.id).get_result::<IdRow>(&mut c).await.optional()?.is_some();
     let authorized = approval_live
@@ -235,7 +255,10 @@ pub(super) async fn tick(state: &AppState) -> anyhow::Result<()> {
             .is_some_and(|e| state.auth_config.is_email_allowed(e));
     if !authorized {
         sql_query("UPDATE connector_actions SET status='cancelled',error='Execution authority revoked',updated_at=now() WHERE id=$1").bind::<SqlUuid,_>(row.id).execute(&mut c).await?;
-        return Ok(());
+        state
+            .review_events
+            .publish(vec![account_id], Some(row.connection_id));
+        return Ok(true);
     }
     drop(c);
     let result =
@@ -250,7 +273,10 @@ pub(super) async fn tick(state: &AppState) -> anyhow::Result<()> {
             sql_query("UPDATE connector_actions SET status='unknown',error='Provider outcome uncertain; inspect provider and recorded partial receipt. Do not repeat sends.',updated_at=now() WHERE id=$1").bind::<SqlUuid,_>(row.id).execute(&mut c).await?;
         }
     }
-    Ok(())
+    state
+        .review_events
+        .publish(vec![account_id], Some(row.connection_id));
+    Ok(true)
 }
 async fn execute(state: &AppState, row: &ActionRow) -> anyhow::Result<Receipt> {
     let request: ActionRequest = serde_json::from_str(&row.request_json)?;

@@ -75,13 +75,18 @@ pub async fn require(
 ) -> Response {
     match authenticate(&state, req.headers().clone(), req.method().clone()).await {
         Ok(p) => {
-            req.extensions_mut().insert(p);
-            next.run(req).await
+            let changed = req.method() == axum::http::Method::POST;
+            req.extensions_mut().insert(p.clone());
+            let response = next.run(req).await;
+            if changed && response.status().is_success() {
+                state.review_events.publish(p.account_ids, p.connection_id);
+            }
+            response
         }
         Err(e) => e.into_response(),
     }
 }
-async fn authenticate(
+pub(super) async fn authenticate(
     state: &AppState,
     headers: axum::http::HeaderMap,
     method: axum::http::Method,

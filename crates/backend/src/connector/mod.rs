@@ -2,6 +2,7 @@
 mod actions;
 mod auth;
 pub(crate) mod documents;
+pub(crate) mod events;
 mod models;
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,7 @@ use shared_types::{connector::Capabilities, AgentDecision, Category, GoogleAccou
 pub fn routes(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/capabilities", get(capabilities))
+        .route("/events", get(events::subscribe))
         .route("/accounts", get(accounts))
         .route("/pairings/:id", get(auth::info))
         .route("/pairings/:id/approve", post(auth::approve))

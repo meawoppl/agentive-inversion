@@ -18,9 +18,7 @@ thiserror.workspace = true
 diesel.workspace = true
 diesel-async.workspace = true
 diesel_migrations.workspace = true
-
-# Web framework
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 tower.workspace = true
 tower-http.workspace = true
 
@@ -59,6 +57,7 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tokio-tungstenite = "0.24.0"
 
 [[bin]]
 name = "agent-cli"

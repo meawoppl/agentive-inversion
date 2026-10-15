@@ -45,6 +45,7 @@ pub struct AppState {
     pub pool: db::DbPool,
     pub auth_config: Arc<AuthConfig>,
     pub triage_health: pollers::TriageHealth,
+    pub review_events: connector::events::ReviewEvents,
 }
 
 /// Build the full application router from shared state.
@@ -246,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         auth_config: auth_config.clone(),
         triage_health: triage_health.clone(),
+        review_events: Default::default(),
     };
 
     if !args.dev_mode {
@@ -350,6 +352,7 @@ mod tests {
         let pool = Pool::builder(manager).build().unwrap();
         AppState {
             pool,
+            review_events: Default::default(),
             triage_health: Arc::new(tokio::sync::RwLock::new(
                 pollers::TriageHealthState::default(),
             )),

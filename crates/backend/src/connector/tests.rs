@@ -316,6 +316,50 @@ async fn connector_database_contract() {
     } else {
         a.1
     };
+    let mut c = pool.get().await.unwrap();
+    let claim_connection =
+        sql_query("SELECT connection_id AS id FROM connector_claims WHERE email_id=$1")
+            .bind::<SqlUuid, _>(email)
+            .get_result::<super::models::IdRow>(&mut c)
+            .await
+            .unwrap()
+            .id;
+    super::work::defer_failed_read(&state, email, claim_connection, Some(404))
+        .await
+        .unwrap();
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!(
+            "/api/v1/work/claims/{}/release",
+            claim["claim_id"].as_str().unwrap()
+        ),
+        Some(&agent),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, deferred) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&agent),
+        None,
+        json!({"limit":1}),
+        None,
+    )
+    .await;
+    assert!(
+        deferred["items"].as_array().unwrap().is_empty(),
+        "release must preserve read backoff"
+    );
+    sql_query("UPDATE connector_claims SET read_retry_after=now()-interval '1 second'")
+        .execute(&mut c)
+        .await
+        .unwrap();
+    drop(c);
     let expired_cid = claim["claim_id"].as_str().unwrap();
     let mut c = pool.get().await.unwrap();
     sql_query("UPDATE connector_claims SET expires_at=now()-interval '1 second'")

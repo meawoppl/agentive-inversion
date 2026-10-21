@@ -889,4 +889,159 @@ async fn connector_database_contract() {
     .await
     .unwrap();
     server.abort();
+    // Reconsideration and legacy coverage, with a fresh authorized connection.
+    let (audit_agent, audit_connection) = pair(&app, &admin, account, false).await;
+    let legacy = Uuid::new_v4();
+    let stale = Uuid::new_v4();
+    let recent = Uuid::new_v4();
+    let archived = Uuid::new_v4();
+    let protected = Uuid::new_v4();
+    let old_claim = Uuid::new_v4();
+    let mut c = pool.get().await.unwrap();
+    for source in [legacy, stale, recent, archived, protected] {
+        sql_query("INSERT INTO emails(id,account_id,gmail_id,thread_id,subject,from_address,to_addresses,body_text,received_at,processed,archived_in_gmail) VALUES($1,$2,$3,$3,'Follow up','sender@example.com',ARRAY['owner@example.com'],'Body',now(),true,$4)")
+            .bind::<SqlUuid,_>(source).bind::<SqlUuid,_>(account).bind::<Text,_>(source.to_string())
+            .bind::<diesel::sql_types::Bool,_>(source==archived).execute(&mut c).await.unwrap();
+        if source != legacy {
+            sql_query("INSERT INTO connector_claims(email_id,claim_id,connection_id,expires_at,completed_at,disposition,repository_commit,repository_path) VALUES($1,$2,$3,now()-interval '1 day',now()-interval '2 days','kept','old','triage/old.json')")
+                .bind::<SqlUuid,_>(source).bind::<SqlUuid,_>(old_claim)
+                .bind::<SqlUuid,_>(Uuid::parse_str(&audit_connection).unwrap()).execute(&mut c).await.unwrap();
+        }
+    }
+    sql_query("UPDATE connector_claims SET completed_at=now() WHERE email_id=$1")
+        .bind::<SqlUuid, _>(recent)
+        .execute(&mut c)
+        .await
+        .unwrap();
+    sql_query("INSERT INTO connector_actions(id,connection_id,email_id,idempotency_key,request_json,kind,status) VALUES($1,$2,$3,'protected-rejection','{}','archive','rejected')")
+        .bind::<SqlUuid,_>(Uuid::new_v4()).bind::<SqlUuid,_>(Uuid::parse_str(&audit_connection).unwrap()).bind::<SqlUuid,_>(protected).execute(&mut c).await.unwrap();
+    drop(c);
+    let (s, r) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&audit_agent),
+        None,
+        json!({"reconsider":true,"limit":50}),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let items = r["items"].as_array().unwrap();
+    assert!(items.iter().any(|x| x["id"] == stale.to_string()));
+    for excluded in [legacy, recent, archived, protected] {
+        assert!(
+            !items.iter().any(|x| x["id"] == excluded.to_string()),
+            "unexpected source {excluded}"
+        );
+    }
+    let (s, r)=call(&app,"POST",&format!("/api/v1/work/claims/{old_claim}/complete"),Some(&audit_agent),None,json!({"email_id":stale,"disposition":"kept","repository_commit":"a".repeat(40),"repository_path":"triage/test.json"}),None).await;
+    assert_eq!(
+        s,
+        StatusCode::CONFLICT,
+        "old generation must be fenced: {r}"
+    );
+    let (s, r) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&audit_agent),
+        None,
+        json!({"source_ids":[legacy,recent,stale,archived,protected,hidden],"limit":50}),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let items = r["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        2,
+        "only legacy and explicitly selected recent source: {r}"
+    );
+    for included in [legacy, recent] {
+        assert!(items.iter().any(|x| x["id"] == included.to_string()));
+    }
+    // A later reply reopens a fresh keep decision, but not across accounts.
+    let followup = Uuid::new_v4();
+    let mut c = pool.get().await.unwrap();
+    sql_query("INSERT INTO emails(id,account_id,gmail_id,thread_id,subject,from_address,to_addresses,body_text,received_at,processed) VALUES($1,$2,$3,$3,'Old question','sender@example.com',ARRAY['owner@example.com'],'Body',now()-interval '2 hours',true)")
+        .bind::<SqlUuid,_>(followup).bind::<SqlUuid,_>(account).bind::<Text,_>(followup.to_string()).execute(&mut c).await.unwrap();
+    sql_query("INSERT INTO connector_claims(email_id,claim_id,connection_id,expires_at,completed_at,disposition) VALUES($1,$2,$3,now(),now()-interval '1 hour','kept')")
+        .bind::<SqlUuid,_>(followup).bind::<SqlUuid,_>(Uuid::new_v4()).bind::<SqlUuid,_>(Uuid::parse_str(&audit_connection).unwrap()).execute(&mut c).await.unwrap();
+    let reply = Uuid::new_v4();
+    sql_query("INSERT INTO emails(id,account_id,gmail_id,thread_id,subject,from_address,to_addresses,body_text,received_at) VALUES($1,$2,$3,$4,'Reply','sender@example.com',ARRAY['owner@example.com'],'Body',now())")
+        .bind::<SqlUuid,_>(reply).bind::<SqlUuid,_>(other).bind::<Text,_>(reply.to_string()).bind::<Text,_>(followup.to_string()).execute(&mut c).await.unwrap();
+    drop(c);
+    let (_, r) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&audit_agent),
+        None,
+        json!({"reconsider":true,"limit":50}),
+        None,
+    )
+    .await;
+    assert!(!r["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x["id"] == followup.to_string()));
+    let mut c = pool.get().await.unwrap();
+    sql_query("UPDATE emails SET account_id=$2 WHERE id=$1")
+        .bind::<SqlUuid, _>(reply)
+        .bind::<SqlUuid, _>(account)
+        .execute(&mut c)
+        .await
+        .unwrap();
+    drop(c);
+    let (s, r) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&audit_agent),
+        None,
+        json!({"reconsider":true,"limit":50}),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x["id"] == followup.to_string()));
+    for status in [
+        "proposed",
+        "queued",
+        "running",
+        "unknown",
+        "succeeded",
+        "cancelled",
+        "rejected",
+    ] {
+        let mut c = pool.get().await.unwrap();
+        sql_query("UPDATE connector_actions SET status=$2 WHERE email_id=$1")
+            .bind::<SqlUuid, _>(protected)
+            .bind::<Text, _>(status)
+            .execute(&mut c)
+            .await
+            .unwrap();
+        drop(c);
+        let (s, r) = call(
+            &app,
+            "POST",
+            "/api/v1/work/claims",
+            Some(&audit_agent),
+            None,
+            json!({"source_ids":[protected]}),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        assert!(
+            r["items"].as_array().unwrap().is_empty(),
+            "must preserve {status} action"
+        );
+    }
 }

@@ -60,9 +60,19 @@ summaries and source references, not blanket copies of private email bodies.
 ## Claim and finish work
 
 `POST /work/claims` with `{"limit":20}` returns `claim_id`, `expires_at`, and
-`items`. Limit 1–50; leases last 30 minutes. Unarchived emails are eligible when unprocessed or when they still have a
-pending legacy proposal. This brings the old review backlog into Portal without
-reopening settled work. Completed connector claims are excluded.
+`items`. Limit 1–50; leases last 30 minutes. Unarchived sources without a
+claim are eligible even if legacy triage marked them processed, unless a legacy
+decision was rejected. Incomplete claims become eligible after lease expiry and
+any live-thread retry delay.
+
+Completed claims with no connector action history become eligible after 24 hours
+or a newer message in the same account/thread. `reconsider:true` reserves a batch
+for these follow-ups. Optional `source_ids` (at most 50) targets particular sources
+and bypasses the age threshold, but not live leases, account scope, archived status,
+or action-history protections. Each reclaimed completion gets a new fenced claim
+generation. Any connector action history protects a completed source from reopening.
+Check `/capabilities` for `work_reconsideration:true` before using the new fields;
+older servers may ignore unknown fields.
 
 - `POST /work/claims/{id}/renew`: extend unfinished live leases by 30 minutes.
 - `POST /work/claims/{id}/release`: release unfinished items for a later run.

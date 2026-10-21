@@ -63,6 +63,7 @@ async fn capabilities(Extension(p): Extension<Principal>) -> Json<Capabilities> 
         max_claim: 50,
         lease_seconds: 1800,
         approval_required: true,
+        work_reconsideration: true,
     })
 }
 async fn accounts(

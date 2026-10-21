@@ -59,6 +59,8 @@ pub struct Capabilities {
     pub max_claim: u32,
     pub lease_seconds: u32,
     pub approval_required: bool,
+    #[serde(default)]
+    pub work_reconsideration: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Source {

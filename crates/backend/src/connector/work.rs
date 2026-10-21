@@ -16,7 +16,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use diesel::{
     prelude::*,
-    sql_types::{Array, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid},
+    sql_types::{Array, Bool, Integer, Nullable, Text, Timestamptz, Uuid as SqlUuid},
 };
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde::Deserialize;
@@ -300,8 +300,59 @@ pub async fn claim(
     let mut c = state.pool.get().await?;
     // Row locks on emails serialize competing claims; expired claims are replaced
     // with a new batch UUID, fencing every mutation by its old holder.
-    let rows=diesel::sql_query("WITH candidates AS (SELECT e.id FROM emails e LEFT JOIN connector_claims w ON w.email_id=e.id WHERE e.account_id=ANY($1) AND NOT e.archived_in_gmail AND (NOT e.processed OR EXISTS (SELECT 1 FROM agent_decisions d WHERE d.source_type='email' AND d.source_id=e.id AND d.status='proposed')) AND (w.email_id IS NULL OR (w.completed_at IS NULL AND w.expires_at<now() AND (w.read_retry_after IS NULL OR w.read_retry_after<=now()))) ORDER BY e.received_at DESC,e.id LIMIT $2 FOR UPDATE OF e SKIP LOCKED) INSERT INTO connector_claims(email_id,claim_id,connection_id,expires_at) SELECT id,$3,$4,$5 FROM candidates ON CONFLICT(email_id) DO UPDATE SET claim_id=excluded.claim_id,connection_id=excluded.connection_id,expires_at=excluded.expires_at WHERE connector_claims.completed_at IS NULL AND connector_claims.expires_at<now() RETURNING email_id AS id")
- .bind::<Array<SqlUuid>,_>(&p.account_ids).bind::<Integer,_>(input.limit.clamp(1,50) as i32).bind::<SqlUuid,_>(id).bind::<SqlUuid,_>(cid).bind::<Timestamptz,_>(expires).load::<IdRow>(&mut c).await?;
+    if input.source_ids.len() > 50 {
+        return Err(ApiError::bad_request(
+            "At most 50 source_ids may be selected",
+        ));
+    }
+    // Reconsider only sources with no action history: approvals, rejections and
+    // uncertain/succeeded effects must never be silently recreated. A new claim
+    // generation fences the old completion and resets its provenance atomically.
+    let rows = diesel::sql_query(
+        r#"
+        WITH candidates AS (
+            SELECT e.id FROM emails e
+            LEFT JOIN connector_claims w ON w.email_id=e.id
+            WHERE e.account_id=ANY($1) AND NOT e.archived_in_gmail
+              AND (cardinality($6::uuid[])=0 OR e.id=ANY($6))
+              AND (
+                (NOT $7 AND (w.email_id IS NULL OR
+                    (w.completed_at IS NULL AND w.expires_at<now()
+                     AND (w.read_retry_after IS NULL OR w.read_retry_after<=now())))
+                 AND (w.email_id IS NOT NULL OR NOT EXISTS (
+                    SELECT 1 FROM agent_decisions d WHERE d.source_type='email'
+                    AND d.source_id=e.id AND d.status='rejected')))
+                OR
+                (w.completed_at IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM connector_actions a WHERE a.email_id=e.id)
+                 AND (cardinality($6::uuid[])>0 OR w.completed_at<now()-interval '24 hours'
+                      OR EXISTS (SELECT 1 FROM emails reply
+                          WHERE reply.account_id=e.account_id AND reply.thread_id=e.thread_id
+                          AND reply.received_at>w.completed_at)))
+              )
+            ORDER BY w.completed_at ASC NULLS FIRST,e.received_at DESC,e.id
+            LIMIT $2 FOR UPDATE OF e SKIP LOCKED
+        )
+        INSERT INTO connector_claims(email_id,claim_id,connection_id,expires_at)
+        SELECT id,$3,$4,$5 FROM candidates
+        ON CONFLICT(email_id) DO UPDATE SET
+            claim_id=excluded.claim_id, connection_id=excluded.connection_id,
+            expires_at=excluded.expires_at, completed_at=NULL, disposition=NULL,
+            repository_commit=NULL, repository_path=NULL,
+            read_retry_after=NULL,last_read_status=NULL
+        WHERE connector_claims.completed_at IS NOT NULL OR connector_claims.expires_at<now()
+        RETURNING email_id AS id
+    "#,
+    )
+    .bind::<Array<SqlUuid>, _>(&p.account_ids)
+    .bind::<Integer, _>(input.limit.clamp(1, 50) as i32)
+    .bind::<SqlUuid, _>(id)
+    .bind::<SqlUuid, _>(cid)
+    .bind::<Timestamptz, _>(expires)
+    .bind::<Array<SqlUuid>, _>(&input.source_ids)
+    .bind::<Bool, _>(input.reconsider)
+    .load::<IdRow>(&mut c)
+    .await?;
     let mut items = vec![];
     for r in rows {
         let e = db::emails::get_by_id(&mut c, r.id).await?;

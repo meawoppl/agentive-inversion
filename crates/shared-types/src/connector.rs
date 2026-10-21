@@ -125,6 +125,12 @@ pub struct SourcePage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimRequest {
+    /// Only revisit completed, action-free sources (daily or after a new reply).
+    #[serde(default)]
+    pub reconsider: bool,
+    /// Optional bounded selection for explicit follow-up; still respects leases and actions.
+    #[serde(default)]
+    pub source_ids: Vec<Uuid>,
     #[serde(default = "default_limit")]
     pub limit: u32,
 }

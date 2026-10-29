@@ -172,7 +172,7 @@ impl GmailClient {
             .hub
             .users()
             .threads_get("me", thread_id)
-            .add_scope(google_gmail1::Scope::Modify)
+            .add_scope(google_gmail1::api::Scope::Modify)
             .format("full")
             .doit()
             .await?;
@@ -193,7 +193,7 @@ impl GmailClient {
             .hub
             .users()
             .settings_send_as_list("me")
-            .add_scope(google_gmail1::Scope::Modify)
+            .add_scope(google_gmail1::api::Scope::Modify)
             .doit()
             .await?;
         let mut own = vec![self.email_address.clone()];
@@ -219,7 +219,7 @@ impl GmailClient {
             .hub
             .users()
             .drafts_create(request, "me")
-            .add_scope(google_gmail1::Scope::Modify)
+            .add_scope(google_gmail1::api::Scope::Modify)
             .upload(
                 std::io::Cursor::new(mime),
                 "message/rfc822".parse().unwrap(),
@@ -233,7 +233,7 @@ impl GmailClient {
             .hub
             .users()
             .drafts_get("me", id)
-            .add_scope(google_gmail1::Scope::Modify)
+            .add_scope(google_gmail1::api::Scope::Modify)
             .format("full")
             .doit()
             .await?;
@@ -251,7 +251,7 @@ impl GmailClient {
             .hub
             .users()
             .drafts_list("me")
-            .add_scope(google_gmail1::Scope::Modify)
+            .add_scope(google_gmail1::api::Scope::Modify)
             .q(&format!("rfc822msgid:{marker}"))
             .max_results(10)
             .doit()

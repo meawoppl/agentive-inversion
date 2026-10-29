@@ -2,6 +2,7 @@
 mod actions;
 mod auth;
 pub(crate) mod documents;
+mod drafts;
 pub(crate) mod events;
 mod models;
 #[cfg(test)]
@@ -36,6 +37,8 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/sources", get(work::sources))
         .route("/sources/:id", get(work::get_source))
         .route("/sources/:id/thread", get(work::get_thread))
+        .route("/sources/:id/drafts", post(drafts::create))
+        .route("/drafts/:id", get(drafts::get))
         .route("/work/claims", post(work::claim))
         .route("/work/claims/:id/renew", post(work::renew))
         .route("/work/claims/:id/release", post(work::release))
@@ -64,6 +67,7 @@ async fn capabilities(Extension(p): Extension<Principal>) -> Json<Capabilities> 
         lease_seconds: 1800,
         approval_required: true,
         work_reconsideration: true,
+        reply_drafts: true,
     })
 }
 async fn accounts(

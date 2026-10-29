@@ -1,6 +1,7 @@
 //! Gmail ingestion remains hosted; agent execution belongs to Portal.
 pub mod email;
 pub mod gmail_client;
+pub mod gmail_drafts;
 use chrono::{DateTime, Utc};
 pub use email::start_email_polling_task;
 use std::sync::Arc;

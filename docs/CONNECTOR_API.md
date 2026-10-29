@@ -260,3 +260,42 @@ No incoming WebSocket message can approve or execute an action.
 
 Approved effects wake the worker immediately and drain without per-item sleeps.
 Execution still rechecks authority and preserves uncertain-outcome handling.
+
+## Gmail reply drafts
+
+Existing `sources:read` + `actions:propose` grants support user-requested drafts;
+no new OAuth scope or pairing is needed. `capabilities.reply_drafts` advertises
+support. These endpoints do not send, archive, complete tasks, or approve actions.
+
+`POST /sources/{source_id}/drafts` requires a stable `Idempotency-Key` header and:
+
+```json
+{"body_text":"Thanks, confirmed working.","reply_all":false,"reply_to_message_id":null}
+```
+
+The server reads the full live thread, selects the latest non-draft message unless
+an explicit Gmail message ID is supplied, honors Reply-To, and sets the RFC reply
+headers and Gmail thread ID. Reply-all deduplicates recipients and excludes the
+account's send-as addresses. Bcc is never copied. Sent-message follow-ups target
+the original recipients. The From address is the connected account.
+
+The response contains `id` (connector operation UUID), `draft_id`, `message_id`,
+`thread_id`, `account_email`, `gmail_link`, `status:"draft"`, and live draft content.
+`GET /drafts/{id}` reads it back with the same connection and account grant.
+Use the existing profile-aware email-link routing for `gmail_link`.
+
+The durable reservation allows one create attempt per connection/key. Retrying
+the same request returns the live draft and preserves Gmail edits. Changed content
+under the same key is a conflict. On an uncertain create, retries only search for
+the operation's Message-ID; an absent result does not trigger another create.
+Do not switch keys to recover. Deleted/sent drafts are not recreated. Editing an
+existing draft is currently done in Gmail; this API deliberately does not overwrite it.
+
+```sh
+bin/agentive draft reply SOURCE_UUID --body-file /private/reply.txt --key reply-purpose-v1
+bin/agentive draft get OPERATION_UUID
+```
+
+Read the live conversation first and only draft on the user's instruction; this is
+not permission for scheduled jobs to draft unsolicited messages. Do not commit draft
+bodies, full messages, or credentials to Git. Saving a draft is not sending a reply.

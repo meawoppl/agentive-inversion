@@ -13,7 +13,7 @@ use shared_types::GoogleAccount;
 /// Client for interacting with Gmail API
 #[allow(dead_code)]
 pub struct GmailClient {
-    hub: Gmail<HttpsConnector<HttpConnector>>,
+    pub(super) hub: Gmail<HttpsConnector<HttpConnector>>,
     pub email_address: String,
 }
 
@@ -507,7 +507,7 @@ impl GmailClient {
         Ok(())
     }
 
-    fn parse_message(message: Message) -> EmailMessage {
+    pub(crate) fn parse_message(message: Message) -> EmailMessage {
         let id = message.id.clone().unwrap_or_default();
         let thread_id = message.thread_id.clone().unwrap_or_default();
         let snippet = message.snippet.clone().unwrap_or_default();

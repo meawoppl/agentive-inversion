@@ -104,3 +104,19 @@ impl TryFrom<ActionRow> for ActionInfo {
         })
     }
 }
+
+#[derive(QueryableByName)]
+pub struct DraftRow {
+    #[diesel(sql_type = Uuid)]
+    pub id: Id,
+    #[diesel(sql_type = Uuid)]
+    pub connection_id: Id,
+    #[diesel(sql_type = Uuid)]
+    pub email_id: Id,
+    #[diesel(sql_type = Text)]
+    pub request_hash: String,
+    #[diesel(sql_type = Text)]
+    pub thread_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub gmail_draft_id: Option<String>,
+}

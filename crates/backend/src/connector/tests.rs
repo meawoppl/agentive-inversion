@@ -207,6 +207,70 @@ async fn connector_database_contract() {
     }
     let (agent, agent_id) = pair(&app, &admin, account, false).await;
     let (reviewer, _) = pair(&app, &admin, account, true).await;
+    // Draft authorization, request-key conflicts, and ownership fail before Google.
+    for (source, key, expected) in [
+        (hidden, Some("draft-key"), StatusCode::FORBIDDEN),
+        (email, None, StatusCode::BAD_REQUEST),
+    ] {
+        let (status, _) = call(
+            &app,
+            "POST",
+            &format!("/api/v1/sources/{source}/drafts"),
+            Some(&agent),
+            None,
+            json!({"body_text":"test reply"}),
+            key,
+        )
+        .await;
+        assert_eq!(status, expected);
+    }
+    let draft_op = Uuid::new_v4();
+    let mut c = pool.get().await.unwrap();
+    let reserve = "INSERT INTO connector_drafts(id,connection_id,email_id,request_key,request_hash,thread_id) VALUES($1,$2,$3,'draft-key','original-hash','thread') ON CONFLICT(connection_id,request_key) DO NOTHING";
+    let cid = Uuid::parse_str(&agent_id).unwrap();
+    assert_eq!(
+        sql_query(reserve)
+            .bind::<SqlUuid, _>(draft_op)
+            .bind::<SqlUuid, _>(cid)
+            .bind::<SqlUuid, _>(email)
+            .execute(&mut c)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sql_query(reserve)
+            .bind::<SqlUuid, _>(Uuid::new_v4())
+            .bind::<SqlUuid, _>(cid)
+            .bind::<SqlUuid, _>(email)
+            .execute(&mut c)
+            .await
+            .unwrap(),
+        0
+    );
+    drop(c);
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/sources/{email}/drafts"),
+        Some(&agent),
+        None,
+        json!({"body_text":"different request"}),
+        Some("draft-key"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/drafts/{draft_op}"),
+        Some(&reviewer),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
     // Docs authorization is checked before touching Google or refreshing tokens.
     for (path, expected) in [
         (

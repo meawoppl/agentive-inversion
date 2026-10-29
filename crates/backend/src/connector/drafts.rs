@@ -1,5 +1,8 @@
 //! User-requested drafts use existing proposal grants. Saving is not sending.
-use super::auth::{hash, Principal};
+use super::{
+    auth::{hash, Principal},
+    models::DraftRow,
+};
 use crate::{
     db,
     error::{ApiError, ApiResult},
@@ -16,8 +19,8 @@ use axum::{
 };
 use diesel::{
     sql_query,
-    sql_types::{Nullable, Text, Uuid as SqlUuid},
-    OptionalExtension, QueryableByName,
+    sql_types::{Text, Uuid as SqlUuid},
+    OptionalExtension,
 };
 use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
@@ -48,21 +51,6 @@ impl DraftRequest {
     }
 }
 
-#[derive(QueryableByName)]
-struct DraftRow {
-    #[diesel(sql_type = SqlUuid)]
-    id: Uuid,
-    #[diesel(sql_type = SqlUuid)]
-    connection_id: Uuid,
-    #[diesel(sql_type = SqlUuid)]
-    email_id: Uuid,
-    #[diesel(sql_type = Text)]
-    request_hash: String,
-    #[diesel(sql_type = Text)]
-    thread_id: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    gmail_draft_id: Option<String>,
-}
 #[derive(Serialize)]
 pub struct DraftResponse {
     pub id: Uuid,

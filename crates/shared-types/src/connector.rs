@@ -61,6 +61,8 @@ pub struct Capabilities {
     pub approval_required: bool,
     #[serde(default)]
     pub work_reconsideration: bool,
+    #[serde(default)]
+    pub reply_drafts: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Source {

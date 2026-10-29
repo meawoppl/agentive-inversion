@@ -172,6 +172,7 @@ impl GmailClient {
             .hub
             .users()
             .threads_get("me", thread_id)
+            .add_scope(google_gmail1::Scope::Modify)
             .format("full")
             .doit()
             .await?;
@@ -188,7 +189,13 @@ impl GmailClient {
             messages.pop()
         }
         .context("Reply target is absent from live thread or is a draft")?;
-        let (_, aliases) = self.hub.users().settings_send_as_list("me").doit().await?;
+        let (_, aliases) = self
+            .hub
+            .users()
+            .settings_send_as_list("me")
+            .add_scope(google_gmail1::Scope::Modify)
+            .doit()
+            .await?;
         let mut own = vec![self.email_address.clone()];
         own.extend(
             aliases
@@ -212,6 +219,7 @@ impl GmailClient {
             .hub
             .users()
             .drafts_create(request, "me")
+            .add_scope(google_gmail1::Scope::Modify)
             .upload(
                 std::io::Cursor::new(mime),
                 "message/rfc822".parse().unwrap(),
@@ -225,6 +233,7 @@ impl GmailClient {
             .hub
             .users()
             .drafts_get("me", id)
+            .add_scope(google_gmail1::Scope::Modify)
             .format("full")
             .doit()
             .await?;
@@ -242,6 +251,7 @@ impl GmailClient {
             .hub
             .users()
             .drafts_list("me")
+            .add_scope(google_gmail1::Scope::Modify)
             .q(&format!("rfc822msgid:{marker}"))
             .max_results(10)
             .doit()

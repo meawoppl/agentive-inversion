@@ -63,6 +63,8 @@ pub struct Capabilities {
     pub work_reconsideration: bool,
     #[serde(default)]
     pub reply_drafts: bool,
+    #[serde(default)]
+    pub auto_archive: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Source {
@@ -189,6 +191,25 @@ pub struct ActionRequest {
     pub repository_path: String,
     pub effect: Effect,
 }
+/// An agent's auditable archive-only decision, never approval of another effect.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoArchiveCategory {
+    BulkMail,
+    ResolvedThread,
+    TaskCaptured,
+    ExplicitUserRequest,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AutoArchiveRequest {
+    pub category: AutoArchiveCategory,
+    pub reason: String,
+    pub reviewed_at: DateTime<Utc>,
+    pub thread_message_ids: Vec<String>,
+    #[serde(default)]
+    pub task_ids: Vec<Uuid>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ActionInfo {
     pub id: Uuid,
@@ -198,6 +219,8 @@ pub struct ActionInfo {
     pub status: String,
     pub request: ActionRequest,
     pub approved_by: Option<String>,
+    #[serde(default)]
+    pub auto_archive: Option<AutoArchiveRequest>,
     pub forward_to: Option<String>,
     pub receipt: Option<Receipt>,
     pub error: Option<String>,
@@ -214,6 +237,8 @@ pub struct Receipt {
     pub archived: bool,
     #[serde(default)]
     pub reported_spam: bool,
+    #[serde(default)]
+    pub auto_archived: bool,
 }
 
 #[cfg(test)]

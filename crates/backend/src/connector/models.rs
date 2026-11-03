@@ -72,6 +72,10 @@ pub struct ActionRow {
     #[diesel(sql_type=Nullable<Text>)]
     pub approved_by: Option<String>,
     #[diesel(sql_type=Nullable<Text>)]
+    pub autoarchive_json: Option<String>,
+    #[diesel(sql_type=Nullable<Uuid>)]
+    pub approved_connection_id: Option<Id>,
+    #[diesel(sql_type=Nullable<Text>)]
     pub forward_to: Option<String>,
     #[diesel(sql_type=Nullable<Text>)]
     pub result_json: Option<String>,
@@ -93,6 +97,10 @@ impl TryFrom<ActionRow> for ActionInfo {
             status: r.status,
             request: serde_json::from_str(&r.request_json)?,
             approved_by: r.approved_by,
+            auto_archive: r
+                .autoarchive_json
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?,
             forward_to: r.forward_to,
             receipt: r
                 .result_json

@@ -299,3 +299,37 @@ bin/agentive draft get OPERATION_UUID
 Read the live conversation first and only draft on the user's instruction; this is
 not permission for scheduled jobs to draft unsolicited messages. Do not commit draft
 bodies, full messages, or credentials to Git. Saving a draft is not sending a reply.
+
+## Delegated automatic archiving
+
+Agent grants now include `actions:autoarchive` (existing work grants are upgraded by
+migration). This narrow permission does not grant `actions:approve`. Revoking the
+connection or removing the scope cancels automatic execution; the worker checks
+current authority and account scope. Pairing describes this permission explicitly.
+`capabilities.auto_archive` reports availability; `approval_required` remains true
+for ordinary proposals and all other effect types.
+
+After proposing an ordinary archive, `POST /actions/{id}/autoarchive` accepts:
+
+```json
+{"category":"bulk_mail","reason":"Newsletter, no remaining work","reviewed_at":"2026-11-03T22:00:00Z","thread_message_ids":["GMAIL_MESSAGE_ID"],"task_ids":[]}
+```
+
+Categories: `bulk_mail`, `resolved_thread`, `task_captured`, `explicit_user_request`.
+Task-captured requires task UUIDs. This is agent judgment backed by the workspace
+policy, not a server claim that natural-language classification is infallible.
+Only this connection's pending **archive** action can be queued; rejected,
+cancelled, uncertain and other effect kinds cannot be promoted. Exact retries
+return the same action; a changed decision conflicts. The action exposes
+`auto_archive` evidence and the receipt exposes `auto_archived` (default false for
+old receipts). The worker adds `agent-autoarchived` and removes INBOX from only
+the source message. No message deletion or thread-wide archive is performed.
+
+The review snapshot must be at most 15 minutes old, include all thread message IDs,
+and still match at execution. Changed threads, drafts/trash/spam, or starred
+messages without explicit user instruction stop execution for review. Provider
+failures stay uncertain and are not automatically replayed. A reviewer can inspect
+and retry with reviewer authority; this retains the original automatic decision
+but uses the ordinary `agent-archived` label. Gmail's Move to Inbox can undo an
+automatic archive; the audit label remains discoverable with
+`label:agent-autoarchived`.

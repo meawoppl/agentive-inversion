@@ -1,6 +1,7 @@
 //! Hosted connector: source access, delegated credentials, work leases and effects.
 mod actions;
 mod auth;
+mod autoarchive;
 pub(crate) mod documents;
 mod drafts;
 pub(crate) mod events;
@@ -45,6 +46,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/work/claims/:id/complete", post(work::complete))
         .route("/actions", get(actions::list).post(actions::submit))
         .route("/actions/:id", get(actions::get))
+        .route("/actions/:id/autoarchive", post(autoarchive::queue))
         .route("/actions/:id/approve", post(actions::approve))
         .route("/actions/:id/reject", post(actions::reject))
         .route("/actions/:id/revise", post(actions::revise))
@@ -61,6 +63,7 @@ async fn capabilities(Extension(p): Extension<Principal>) -> Json<Capabilities> 
     Json(Capabilities {
         api_version: "1".into(),
         mode: "portal_connector".into(),
+        auto_archive: p.scopes.iter().any(|s| s == "actions:autoarchive"),
         scopes: p.scopes,
         account_ids: p.account_ids,
         max_claim: 50,

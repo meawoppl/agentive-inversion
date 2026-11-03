@@ -26,16 +26,18 @@ Website-only connection management: `GET /pairings/{id}`, `POST
 /pairings/{id}/approve` (`account_ids` array), `GET /connections`, `POST
 /connections/{id}/revoke`. These require a login cookie; mutations also require
 matching `Origin` and `X-Agentive-Request: 1`. Pairing has a bounded global limit
-of 1,000 unexpired challenges. Connection grants are immutable; reconnect to change
-accounts or scopes. Google tokens are never returned.
+of 1,000 unexpired challenges. Connection grants are normally immutable; reconnect to change
+accounts or scopes. The November 3 migration explicitly adds archive-only
+delegation to existing work grants. Google tokens are never returned.
 
 | Grant | Scopes |
 | --- | --- |
-| Agent | `sources:read`, `work:write`, `actions:propose`, `legacy:export` |
+| Agent | `sources:read`, `work:write`, `actions:propose`, `actions:autoarchive`, `legacy:export` |
 | Review | `sources:read`, `actions:propose` (queue reads), `actions:approve` |
 
 A reviewer cannot create a proposal because submission requires a live work claim.
-An agent cannot approve, reject, or retry actions. Scope separation only works if
+An agent cannot use generic approve, reject, or retry routes; it may queue only
+its own pending archive through the dedicated automatic-archive route. Scope separation only works if
 the scheduled process cannot obtain a reviewer credential.
 
 ## Read sources

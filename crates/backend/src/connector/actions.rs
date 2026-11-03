@@ -245,7 +245,14 @@ pub(super) async fn tick(state: &AppState) -> anyhow::Result<bool> {
         .publish(vec![account_id], Some(row.connection_id));
     let grant=sql_query("SELECT * FROM connector_connections WHERE id=$1 AND revoked_at IS NULL AND expires_at>now()").bind::<SqlUuid,_>(row.connection_id).get_result::<ConnectionRow>(&mut c).await.optional()?;
     let approval_live=sql_query("SELECT a.id FROM connector_actions a LEFT JOIN connector_connections c ON c.id=a.approved_connection_id WHERE a.id=$1 AND c.revoked_at IS NULL AND c.expires_at>now() AND 'actions:approve'=ANY(c.scopes)").bind::<SqlUuid,_>(row.id).get_result::<IdRow>(&mut c).await.optional()?.is_some();
-    let authorized = approval_live
+    let auto_authorized = row.approved_connection_id == Some(row.connection_id)
+        && row.kind == "archive"
+        && row.autoarchive_json.is_some()
+        && grant.as_ref().is_some_and(|g| {
+            g.scopes.iter().any(|s| s == "actions:autoarchive")
+                && g.account_ids.contains(&account_id)
+        });
+    let authorized = (approval_live || auto_authorized)
         && grant
             .as_ref()
             .is_some_and(|g| state.auth_config.is_email_allowed(&g.owner_email))
@@ -280,6 +287,8 @@ pub(super) async fn tick(state: &AppState) -> anyhow::Result<bool> {
 }
 async fn execute(state: &AppState, row: &ActionRow) -> anyhow::Result<Receipt> {
     let request: ActionRequest = serde_json::from_str(&row.request_json)?;
+    let auto_execution =
+        row.autoarchive_json.is_some() && row.approved_connection_id == Some(row.connection_id);
     let mut c = state.pool.get().await?;
     let email = db::emails::get_by_id(&mut c, row.email_id).await?;
     let account = db::google_accounts::get_by_id(&mut c, email.account_id).await?;
@@ -296,6 +305,7 @@ async fn execute(state: &AppState, row: &ActionRow) -> anyhow::Result<Receipt> {
             forwarded: false,
             archived: false,
             reported_spam: false,
+            auto_archived: false,
         });
     match request.effect {
         Effect::ReportSpam => {
@@ -312,6 +322,15 @@ async fn execute(state: &AppState, row: &ActionRow) -> anyhow::Result<Receipt> {
         }
         Effect::Archive | Effect::ForwardReceipt => {
             let gmail = GmailClient::from_account(&account).await?;
+            if let Some(json) = row.autoarchive_json.as_ref().filter(|_| auto_execution) {
+                anyhow::ensure!(
+                    matches!(request.effect, Effect::Archive),
+                    "Automatic delegation only permits archive"
+                );
+                let decision: AutoArchiveRequest = serde_json::from_str(json)?;
+                let messages = gmail.get_thread(&email.thread_id).await?;
+                super::autoarchive::check_thread(&decision, &email.gmail_id, &messages)?;
+            }
             if matches!(request.effect, Effect::ForwardReceipt) && !receipt.forwarded {
                 let to = row
                     .forward_to
@@ -336,12 +355,15 @@ async fn execute(state: &AppState, row: &ActionRow) -> anyhow::Result<Receipt> {
             let label = gmail
                 .ensure_label(if receipt.forwarded {
                     "agent-forwarded"
+                } else if auto_execution {
+                    "agent-autoarchived"
                 } else {
                     "agent-archived"
                 })
                 .await?;
             gmail.archive_with_label(&email.gmail_id, &label).await?;
             receipt.archived = true;
+            receipt.auto_archived = auto_execution;
             let mut c = state.pool.get().await?;
             sql_query("UPDATE emails SET archived_in_gmail=true WHERE id=$1")
                 .bind::<SqlUuid, _>(email.id)

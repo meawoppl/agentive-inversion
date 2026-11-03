@@ -243,7 +243,7 @@ pub async fn approve(
   let pair=sql_query("SELECT * FROM connector_pairings WHERE id=$1 AND expires_at>now() FOR UPDATE").bind::<SqlUuid,_>(id).get_result::<PairRow>(&mut *c).await?;
   if pair.connection_id.is_some(){return Err(ApiError::Conflict("Already approved".into()));}
   let cid=Uuid::new_v4();
-  let row=sql_query("INSERT INTO connector_connections(id,token_hash,name,owner_email,account_ids,scopes,expires_at) SELECT $2,secret_hash,name,$3,$4,CASE WHEN requested_review THEN ARRAY['sources:read','actions:propose','actions:approve'] ELSE ARRAY['sources:read','work:write','actions:propose','legacy:export'] END,now()+interval '90 days' FROM connector_pairings WHERE id=$1 RETURNING *")
+  let row=sql_query("INSERT INTO connector_connections(id,token_hash,name,owner_email,account_ids,scopes,expires_at) SELECT $2,secret_hash,name,$3,$4,CASE WHEN requested_review THEN ARRAY['sources:read','actions:propose','actions:approve'] ELSE ARRAY['sources:read','work:write','actions:propose','actions:autoarchive','legacy:export'] END,now()+interval '90 days' FROM connector_pairings WHERE id=$1 RETURNING *")
    .bind::<SqlUuid,_>(id).bind::<SqlUuid,_>(cid).bind::<Text,_>(p.email).bind::<Array<SqlUuid>,_>(input.account_ids).get_result::<ConnectionRow>(&mut *c).await?;
   sql_query("UPDATE connector_pairings SET connection_id=$2 WHERE id=$1").bind::<SqlUuid,_>(id).bind::<SqlUuid,_>(cid).execute(&mut *c).await?;Ok(row)
  }).await?;

@@ -65,3 +65,7 @@ Watchtower automatically replaces the container. The image contains the backend,
 embedded frontend, and migrations. It contains no Claude CLI or other agent runtime.
 
 [MIT licensed](LICENSE).
+
+Agents have narrowly delegated automatic archiving for clearly eligible mail, marked
+`agent-autoarchived` with a decision and receipt in the connector ledger. Other
+provider effects retain Portal review. See [the API contract](docs/CONNECTOR_API.md#delegated-automatic-archiving).

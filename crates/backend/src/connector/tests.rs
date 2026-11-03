@@ -207,6 +207,108 @@ async fn connector_database_contract() {
     }
     let (agent, agent_id) = pair(&app, &admin, account, false).await;
     let (reviewer, _) = pair(&app, &admin, account, true).await;
+    // Auto-archive has a separate, effect-limited grant and immutable decision.
+    let auto_id = Uuid::new_v4();
+    let auto_request = json!({"email_id":email,"claim_id":Uuid::new_v4(),"reason":"Archive test","repository_commit":"a".repeat(40),"repository_path":"triage/test.json","effect":{"type":"archive"}});
+    let mut c = pool.get().await.unwrap();
+    sql_query("INSERT INTO connector_actions(id,connection_id,email_id,idempotency_key,request_json,kind,status) VALUES($1,$2,$3,'auto-test',$4,'archive','proposed')")
+        .bind::<SqlUuid,_>(auto_id).bind::<SqlUuid,_>(Uuid::parse_str(&agent_id).unwrap()).bind::<SqlUuid,_>(email).bind::<Text,_>(auto_request.to_string()).execute(&mut c).await.unwrap();
+    drop(c);
+    let decision = json!({"category":"bulk_mail","reason":"Routine newsletter; nothing outstanding","reviewed_at":chrono::Utc::now(),"thread_message_ids":[email.to_string()],"task_ids":[]});
+    let path = format!("/api/v1/actions/{auto_id}/autoarchive");
+    let (s, _) = call(
+        &app,
+        "POST",
+        &path,
+        Some(&reviewer),
+        None,
+        decision.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (foreign_agent, foreign_id) = pair(&app, &admin, other, false).await;
+    let (s, _) = call(
+        &app,
+        "POST",
+        &path,
+        Some(&foreign_agent),
+        None,
+        decision.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, a) = call(
+        &app,
+        "POST",
+        &path,
+        Some(&agent),
+        None,
+        decision.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    assert_eq!(a["status"], "queued");
+    assert_eq!(a["auto_archive"]["category"], "bulk_mail");
+    let (s, a) = call(
+        &app,
+        "POST",
+        &path,
+        Some(&agent),
+        None,
+        decision.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(a["id"], auto_id.to_string());
+    let mut changed = decision.clone();
+    changed["reason"] = json!("Different decision");
+    let (s, _) = call(&app, "POST", &path, Some(&agent), None, changed, None).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let mut c = pool.get().await.unwrap();
+    sql_query("UPDATE connector_connections SET scopes=array_remove(scopes,'actions:autoarchive') WHERE id=$1").bind::<SqlUuid,_>(Uuid::parse_str(&agent_id).unwrap()).execute(&mut c).await.unwrap();
+    drop(c);
+    let (s, _) = call(
+        &app,
+        "POST",
+        &path,
+        Some(&agent),
+        None,
+        decision.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    // Worker cancels a queued automatic effect when its narrow grant is removed.
+    super::actions::tick(&state).await.unwrap();
+    let (_, a) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/actions/{auto_id}"),
+        Some(&agent),
+        None,
+        json!(null),
+        None,
+    )
+    .await;
+    assert_eq!(a["status"], "cancelled");
+    let mut c = pool.get().await.unwrap();
+    sql_query("UPDATE connector_connections SET scopes=array_append(scopes,'actions:autoarchive') WHERE id=$1").bind::<SqlUuid,_>(Uuid::parse_str(&agent_id).unwrap()).execute(&mut c).await.unwrap();
+    // Leave the remainder of this contract's fixtures unchanged.
+    sql_query("DELETE FROM connector_actions WHERE id=$1")
+        .bind::<SqlUuid, _>(auto_id)
+        .execute(&mut c)
+        .await
+        .unwrap();
+    sql_query("UPDATE connector_connections SET revoked_at=now() WHERE id=$1")
+        .bind::<SqlUuid, _>(Uuid::parse_str(&foreign_id).unwrap())
+        .execute(&mut c)
+        .await
+        .unwrap();
+    drop(c);
     // Draft authorization, request-key conflicts, and ownership fail before Google.
     for (source, key, expected) in [
         (hidden, Some("draft-key"), StatusCode::FORBIDDEN),
@@ -483,6 +585,18 @@ async fn connector_database_contract() {
     let id = action["id"].as_str().unwrap();
     assert_eq!(action["kind"], "report_spam");
     assert_eq!(action["status"], "proposed");
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/actions/{id}/autoarchive"),
+        Some(&agent),
+        None,
+        decision.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND); // Spam cannot use archive delegation.
+
     let (s, replay) = call(
         &app,
         "POST",

@@ -99,7 +99,7 @@ pub(super) async fn list(
     match response.status().as_u16() {
         200 => {},
         400 => return Err(ApiError::bad_request("Google rejected the Drive query or page token. Use Drive v3 query syntax; restart pagination if the token expired.")),
-        401 | 403 => return Err(ApiError::Forbidden("Google denied Drive search. Reconnect this account on the hosted site to grant read-only Drive metadata access, verify shared-drive access, and ensure the Google Drive API is enabled.".into())),
+        401 | 403 => return Err(super::google_errors::failure(response, "Drive search", q.account_id, &state.auth_config.google_client_id).await),
         404 => return Err(ApiError::not_found("Google Drive resource")),
         status => return Err(ApiError::Conflict(format!("Google Drive is unavailable (HTTP {status}); retry later."))),
     }

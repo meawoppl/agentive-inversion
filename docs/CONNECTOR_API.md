@@ -368,3 +368,36 @@ to the selected account are discoverable, not every item in its Workspace domain
 
 References: [files.list](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list),
 [Drive query syntax](https://developers.google.com/workspace/drive/api/guides/search-files).
+
+### Google account and Cloud-project diagnostics
+
+Drive/Docs access-denied responses now include the upstream HTTP status, selected
+`account_id`, public deployed `oauth_client_id`, and recognized Google error reasons.
+When Google returns ErrorInfo metadata, diagnostics include `service` and the
+numeric `consumer=projects/...` project. Raw provider messages, URLs, tokens and
+arbitrary metadata are never echoed. Token-refresh failures use the same decoder.
+Unknown/malformed diagnostics retain a safe fallback, not an assumed cause.
+
+These are separate configuration layers:
+
+| Layer | Who configures it | Required setting |
+| --- | --- | --- |
+| Hosted application's OAuth client | Administrator of the Cloud project owning the deployed client | Enable Drive and Docs APIs in that project; configure consent audience/scopes and redirect URI. The administrator's Google login can differ from all connected accounts. |
+| Connected data account | Each user connecting Gmail/Docs | Grant requested scopes to this client. A grant for one account does not grant access to another. |
+| File or shared drive | File owner / Workspace administrator | Give the selected data account access; permit the app under organizational API policy. |
+| Portal agent | Workspace owner | Delegate the account and `sources:read` to the agent. This does not replace Google consent or Cloud API enablement. |
+
+Each connected account needs its own consent, but no separate Cloud project. Match the
+reported public OAuth client ID to Google Cloud Console → APIs & Services →
+Credentials, then check API enablement in that same project. If Google reports a
+consumer project number, use it to confirm the project selection.
+
+- `SERVICE_DISABLED` / `accessNotConfigured`: fix project API enablement.
+- `ACCESS_TOKEN_SCOPE_INSUFFICIENT` / `insufficientPermissions`: reconnect the selected account with the required consent.
+- `invalid_grant`: selected-account refresh authorization failed.
+- `invalid_client`: fix hosted OAuth client configuration.
+- `forbidden` / `domainPolicy`: inspect file access and Workspace policy.
+
+An OAuth consent screenshot alone does not establish which credentials a deployed
+server is using. Enabling APIs does not require every connected user to administer
+the Cloud project or automatically require renewed consent.

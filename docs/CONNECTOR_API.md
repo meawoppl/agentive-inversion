@@ -335,3 +335,36 @@ and retry with reviewer authority; this retains the original automatic decision
 but uses the ordinary `agent-archived` label. Gmail's Move to Inbox can undo an
 automatic archive; the audit label remains discoverable with
 `label:agent-autoarchived`.
+
+
+## Drive discovery
+
+`GET /api/v1/drive/files?account_id=UUID&q=DRIVE_QUERY&limit=100&page_token=TOKEN`
+requires `sources:read` and the selected account's grant. `capabilities.drive_search`
+advertises endpoint availability, not that a particular Google account has consented.
+
+- Omit `q` to list accessible files; otherwise use URL-encoded Drive v3 syntax,
+  e.g. `fullText contains 'Kruze'` or `'FOLDER_ID' in parents`.
+- Default corpus is `user` (owned/shared files). Set `all_drives=true` for all-drive
+  search, or `drive_id=ID` to narrow to one shared drive; those options are exclusive.
+- Trash is excluded by default. `include_trashed=true` removes that restriction.
+- `limit` is 1–100 (default 100). Query length is at most 4,000 bytes and page token
+  at most 4,096 bytes. Continue while `nextPageToken` exists, even on an empty page.
+  Keep account, query, and corpus options unchanged across pages.
+- Response preserves Google's `files`, `nextPageToken`, and `incompleteSearch`.
+  Results include IDs, names, MIME types, descriptions, web links, dates, sizes,
+  owners, parents, drive IDs, trash state, and shortcut targets. A shortcut is not
+  the target file's contents. Respect `incompleteSearch:true`: narrow to individual
+  drives rather than reporting exhaustive coverage. Search is not a stable snapshot.
+- Responses use `Cache-Control: no-store`. This route never downloads, edits,
+  shares, or persists file contents. Google Docs contents remain available through
+  `/documents/{id}`; PDF/Sheets content export is not implemented here.
+
+OAuth adds `https://www.googleapis.com/auth/drive.metadata.readonly`. Existing
+accounts must reconnect on the hosted site and consent; enable Google Drive API in
+that OAuth project. Docs-only permission cannot list Drive. A 403 explains the
+consent/API/access checks; it is not an empty search result. Only items accessible
+to the selected account are discoverable, not every item in its Workspace domain.
+
+References: [files.list](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list),
+[Drive query syntax](https://developers.google.com/workspace/drive/api/guides/search-files).

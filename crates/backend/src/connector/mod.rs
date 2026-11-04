@@ -4,6 +4,7 @@ mod auth;
 mod autoarchive;
 pub(crate) mod documents;
 mod drafts;
+pub(crate) mod drive;
 pub(crate) mod events;
 mod models;
 #[cfg(test)]
@@ -34,6 +35,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/connections/:id/revoke", post(auth::revoke))
         .route("/calendar/events", get(calendar_events))
         .route("/documents/:id", get(documents::get))
+        .route("/drive/files", get(drive::list))
         .route("/mail/search", get(work::search_mail))
         .route("/sources", get(work::sources))
         .route("/sources/:id", get(work::get_source))
@@ -71,6 +73,7 @@ async fn capabilities(Extension(p): Extension<Principal>) -> Json<Capabilities> 
         approval_required: true,
         work_reconsideration: true,
         reply_drafts: true,
+        drive_search: true,
     })
 }
 async fn accounts(

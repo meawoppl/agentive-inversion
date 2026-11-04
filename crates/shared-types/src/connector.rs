@@ -64,6 +64,8 @@ pub struct Capabilities {
     #[serde(default)]
     pub reply_drafts: bool,
     #[serde(default)]
+    pub drive_search: bool,
+    #[serde(default)]
     pub auto_archive: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

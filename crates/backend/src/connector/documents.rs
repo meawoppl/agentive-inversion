@@ -14,6 +14,11 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+#[derive(Deserialize)]
+pub(super) struct AccessToken {
+    pub(super) access_token: String,
+}
+
 pub(crate) const DOCS_SCOPE: &str = "https://www.googleapis.com/auth/documents.readonly";
 #[derive(Deserialize)]
 pub(super) struct DocumentQuery {
@@ -42,8 +47,31 @@ pub(super) async fn get(
     p.scope("sources:read")?;
     p.account(q.account_id)?;
     validate_document_id(&id)?;
+    let (client, token) = read_client(&state, q.account_id).await?;
+    let response = client
+        .get(format!("https://docs.googleapis.com/v1/documents/{id}"))
+        .query(&[("includeTabsContent", "true")])
+        .bearer_auth(token.access_token)
+        .send()
+        .await
+        .map_err(anyhow::Error::from)?;
+    match response.status().as_u16() {
+        200 => {},
+        403 => return Err(ApiError::Forbidden("Google denied document access. Reconnect the selected account to grant read-only Docs access, verify that it can open this document, and ensure the Google Docs API is enabled for the OAuth project.".into())),
+        404 => return Err(ApiError::not_found("Google document")),
+        status => return Err(ApiError::Conflict(format!("Google Docs is unavailable (HTTP {status}); retry later."))),
+    }
+    // Preserve complete structured documents and nested tabs without persisting bodies.
+    let document: serde_json::Value = response.json().await.map_err(anyhow::Error::from)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(document)).into_response())
+}
+/// Refresh only after the route has checked the delegated account grant.
+pub(super) async fn read_client(
+    state: &AppState,
+    account_id: Uuid,
+) -> ApiResult<(reqwest::Client, AccessToken)> {
     let mut conn = state.pool.get().await?;
-    let account = db::google_accounts::get_by_id(&mut conn, q.account_id).await?;
+    let account = db::google_accounts::get_by_id(&mut conn, account_id).await?;
     drop(conn);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -67,30 +95,11 @@ pub(super) async fn get(
     if !response.status().is_success() {
         return Err(ApiError::Conflict("Google authorization could not be refreshed. Reconnect this account on the hosted site.".into()));
     }
-    #[derive(Deserialize)]
-    struct AccessToken {
-        access_token: String,
-    }
     let token = response
         .json::<AccessToken>()
         .await
         .map_err(anyhow::Error::from)?;
-    let response = client
-        .get(format!("https://docs.googleapis.com/v1/documents/{id}"))
-        .query(&[("includeTabsContent", "true")])
-        .bearer_auth(token.access_token)
-        .send()
-        .await
-        .map_err(anyhow::Error::from)?;
-    match response.status().as_u16() {
-        200 => {},
-        403 => return Err(ApiError::Forbidden("Google denied document access. Reconnect the selected account to grant read-only Docs access, verify that it can open this document, and ensure the Google Docs API is enabled for the OAuth project.".into())),
-        404 => return Err(ApiError::not_found("Google document")),
-        status => return Err(ApiError::Conflict(format!("Google Docs is unavailable (HTTP {status}); retry later."))),
-    }
-    // Preserve complete structured documents and nested tabs without persisting bodies.
-    let document: serde_json::Value = response.json().await.map_err(anyhow::Error::from)?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(document)).into_response())
+    Ok((client, token))
 }
 #[cfg(test)]
 mod tests {

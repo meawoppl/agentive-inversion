@@ -402,6 +402,9 @@ async fn connector_database_contract() {
     assert!(query["scope"]
         .split_whitespace()
         .any(|scope| scope == super::documents::DOCS_SCOPE));
+    assert!(query["scope"]
+        .split_whitespace()
+        .any(|scope| scope == super::drive::DRIVE_SCOPE));
     assert_eq!(query["include_granted_scopes"], "true");
     assert_eq!(query["prompt"], "consent");
 
@@ -441,6 +444,14 @@ async fn connector_database_contract() {
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
     for (path, expected) in [
+        (
+            format!("/api/v1/drive/files?account_id={other}"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            format!("/api/v1/drive/files?account_id={account}&limit=101"),
+            StatusCode::BAD_REQUEST,
+        ),
         (
             format!("/api/v1/mail/search?account_id={other}&q=kruze"),
             StatusCode::FORBIDDEN,

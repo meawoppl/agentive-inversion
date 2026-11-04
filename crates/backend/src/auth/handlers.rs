@@ -37,7 +37,7 @@ pub async fn auth_login(State(state): State<AppState>) -> ApiResult<Response> {
 
     let csrf_state = uuid::Uuid::new_v4().to_string();
 
-    // Request scopes for login (openid, email, profile) plus Gmail, Calendar and read-only Docs access
+    // Request scopes for login (openid, email, profile) plus Gmail, Calendar, read-only Docs and Drive metadata
     let scopes = [
         "openid",
         "email",
@@ -45,6 +45,7 @@ pub async fn auth_login(State(state): State<AppState>) -> ApiResult<Response> {
         "https://www.googleapis.com/auth/gmail.modify",
         "https://www.googleapis.com/auth/calendar",
         crate::connector::documents::DOCS_SCOPE,
+        crate::connector::drive::DRIVE_SCOPE,
     ]
     .join(" ");
 
@@ -237,7 +238,7 @@ async fn handle_callback_inner(
 /// Store OAuth tokens in google_accounts table
 ///
 /// Both email and calendar pollers will look up tokens from google_accounts,
-/// since we request all scopes (gmail.modify, calendar, documents.readonly) in a single OAuth flow.
+/// since we request all scopes (gmail.modify, calendar, documents.readonly, drive.metadata.readonly) in a single OAuth flow.
 async fn store_oauth_tokens(
     pool: &crate::db::DbPool,
     email: &str,

@@ -6,6 +6,7 @@ pub(crate) mod documents;
 mod drafts;
 pub(crate) mod drive;
 pub(crate) mod events;
+mod google_errors;
 mod models;
 #[cfg(test)]
 mod tests;

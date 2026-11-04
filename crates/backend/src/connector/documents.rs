@@ -56,10 +56,22 @@ pub(super) async fn get(
         .await
         .map_err(anyhow::Error::from)?;
     match response.status().as_u16() {
-        200 => {},
-        403 => return Err(ApiError::Forbidden("Google denied document access. Reconnect the selected account to grant read-only Docs access, verify that it can open this document, and ensure the Google Docs API is enabled for the OAuth project.".into())),
+        200 => {}
+        401 | 403 => {
+            return Err(super::google_errors::failure(
+                response,
+                "Docs read",
+                q.account_id,
+                &state.auth_config.google_client_id,
+            )
+            .await)
+        }
         404 => return Err(ApiError::not_found("Google document")),
-        status => return Err(ApiError::Conflict(format!("Google Docs is unavailable (HTTP {status}); retry later."))),
+        status => {
+            return Err(ApiError::Conflict(format!(
+                "Google Docs is unavailable (HTTP {status}); retry later."
+            )))
+        }
     }
     // Preserve complete structured documents and nested tabs without persisting bodies.
     let document: serde_json::Value = response.json().await.map_err(anyhow::Error::from)?;
@@ -93,7 +105,13 @@ pub(super) async fn read_client(
         .await
         .map_err(anyhow::Error::from)?;
     if !response.status().is_success() {
-        return Err(ApiError::Conflict("Google authorization could not be refreshed. Reconnect this account on the hosted site.".into()));
+        return Err(super::google_errors::failure(
+            response,
+            "token refresh",
+            account_id,
+            &state.auth_config.google_client_id,
+        )
+        .await);
     }
     let token = response
         .json::<AccessToken>()

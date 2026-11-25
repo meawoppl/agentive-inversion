@@ -136,6 +136,9 @@ pub struct ClaimRequest {
     /// Only revisit completed, action-free sources (daily or after a new reply).
     #[serde(default)]
     pub reconsider: bool,
+    /// Explicit user feedback to revisit legacy rejections; never used by scheduled selection.
+    #[serde(default)]
+    pub legacy_feedback: Option<String>,
     /// Optional bounded selection for explicit follow-up; still respects leases and actions.
     #[serde(default)]
     pub source_ids: Vec<Uuid>,

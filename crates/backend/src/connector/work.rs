@@ -305,6 +305,20 @@ pub async fn claim(
             "At most 50 source_ids may be selected",
         ));
     }
+    if let Some(reason) = &input.legacy_feedback {
+        if input.source_ids.is_empty()
+            || input.source_ids.len() > 10
+            || input.reconsider
+            || reason.trim().is_empty()
+            || reason.len() > 2000
+        {
+            return Err(ApiError::bad_request(
+                "Legacy feedback requires 1-10 explicit source_ids, a bounded reason, and reconsider=false",
+            ));
+        }
+        tracing::info!(claim_id = %id, connection_id = %cid, source_ids = ?input.source_ids,
+            feedback = %reason, "Explicit legacy reconsideration requested");
+    }
     // Reconsider only sources with no action history: approvals, rejections and
     // uncertain/succeeded effects must never be silently recreated. A new claim
     // generation fences the old completion and resets its provenance atomically.
@@ -315,11 +329,13 @@ pub async fn claim(
             LEFT JOIN connector_claims w ON w.email_id=e.id
             WHERE e.account_id=ANY($1) AND NOT e.archived_in_gmail
               AND (cardinality($6::uuid[])=0 OR e.id=ANY($6))
+              AND (NOT $8 OR NOT EXISTS (SELECT 1 FROM connector_actions a WHERE a.email_id=e.id))
               AND (
                 (NOT $7 AND (w.email_id IS NULL OR
                     (w.completed_at IS NULL AND w.expires_at<now()
                      AND (w.read_retry_after IS NULL OR w.read_retry_after<=now())))
-                 AND (w.email_id IS NOT NULL OR NOT EXISTS (
+                 AND (w.email_id IS NOT NULL OR ($8 AND NOT EXISTS (
+                    SELECT 1 FROM connector_actions a WHERE a.email_id=e.id)) OR NOT EXISTS (
                     SELECT 1 FROM agent_decisions d WHERE d.source_type='email'
                     AND d.source_id=e.id AND d.status='rejected')))
                 OR
@@ -351,6 +367,7 @@ pub async fn claim(
     .bind::<Timestamptz, _>(expires)
     .bind::<Array<SqlUuid>, _>(&input.source_ids)
     .bind::<Bool, _>(input.reconsider)
+    .bind::<Bool, _>(input.legacy_feedback.is_some())
     .load::<IdRow>(&mut c)
     .await?;
     let mut items = vec![];

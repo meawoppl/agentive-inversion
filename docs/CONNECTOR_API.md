@@ -401,3 +401,14 @@ consumer project number, use it to confirm the project selection.
 An OAuth consent screenshot alone does not establish which credentials a deployed
 server is using. Enabling APIs does not require every connected user to administer
 the Cloud project or automatically require renewed consent.
+
+### Explicit feedback on legacy rejections
+
+`POST /work/claims` accepts optional `legacy_feedback` (a nonempty reason, at most
+2,000 bytes) only with 1–10 explicit `source_ids` and `reconsider:false`. Use it
+only when the user asks to revisit that bounded set, and record the instruction
+in the committed triage records. It lets previously unclaimed legacy-rejected
+sources enter review; legacy decisions remain unchanged. Account scope, archive
+state, active leases, read backoff, and connector action history remain protected.
+This does not approve any provider effect. Ordinary scheduled selection must omit
+this field. Requests are logged with the claim, connection, source IDs and reason.

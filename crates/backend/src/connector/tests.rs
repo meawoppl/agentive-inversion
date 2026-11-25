@@ -1233,4 +1233,77 @@ async fn connector_database_contract() {
             "must preserve {status} action"
         );
     }
+    // Explicit feedback can revisit a legacy rejection, never a connector effect.
+    let rejected_legacy = Uuid::new_v4();
+    let mut c = pool.get().await.unwrap();
+    sql_query("INSERT INTO emails(id,account_id,gmail_id,thread_id,subject,from_address,to_addresses,body_text,received_at) VALUES($1,$2,$3,$3,'Legacy rejected','sender@example.com',ARRAY['owner@example.com'],'Body',now())")
+        .bind::<SqlUuid,_>(rejected_legacy).bind::<SqlUuid,_>(account).bind::<Text,_>(rejected_legacy.to_string()).execute(&mut c).await.unwrap();
+    let decision = Uuid::new_v4();
+    sql_query("INSERT INTO agent_decisions(id,source_type,source_id,decision_type,proposed_action,reasoning,confidence,status) VALUES($1,'email',$2,'create_todo','{}','old rejection',0.9,'rejected')")
+        .bind::<SqlUuid,_>(decision).bind::<SqlUuid,_>(rejected_legacy).execute(&mut c).await.unwrap();
+    drop(c);
+    let (_, r) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&audit_agent),
+        None,
+        json!({"source_ids":[rejected_legacy]}),
+        None,
+    )
+    .await;
+    assert!(r["items"].as_array().unwrap().is_empty());
+    for request in [
+        json!({"legacy_feedback":"revisit"}),
+        json!({"source_ids":[rejected_legacy],"legacy_feedback":" "}),
+        json!({"source_ids":[rejected_legacy],"legacy_feedback":"revisit","reconsider":true}),
+        json!({"source_ids":vec![rejected_legacy;11],"legacy_feedback":"revisit"}),
+    ] {
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/api/v1/work/claims",
+            Some(&audit_agent),
+            None,
+            request,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+    let selection = json!({"source_ids":[rejected_legacy,protected,archived,hidden,stale],"legacy_feedback":"User explicitly asked to revisit these sources"});
+    let (s, r) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&audit_agent),
+        None,
+        selection.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["items"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["items"][0]["id"], rejected_legacy.to_string());
+    let (_, r) = call(
+        &app,
+        "POST",
+        "/api/v1/work/claims",
+        Some(&audit_agent),
+        None,
+        selection,
+        None,
+    )
+    .await;
+    assert!(
+        r["items"].as_array().unwrap().is_empty(),
+        "live lease must be protected"
+    );
+    let mut c = pool.get().await.unwrap();
+    let preserved = sql_query("SELECT id FROM agent_decisions WHERE id=$1 AND status='rejected'")
+        .bind::<SqlUuid, _>(decision)
+        .load::<super::models::IdRow>(&mut c)
+        .await
+        .unwrap();
+    assert_eq!(preserved.len(), 1);
 }
